@@ -1,0 +1,55 @@
+[*] GTKWave Analyzer Save File
+[*]
+[dumpfile] "sim.vcd"
+[savefile] "sim_view.gtkw"
+[timestart] 0
+[size] 1920 1080
+[pos] -1 -1
+*-30.000000 2256000000 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1
+@28
+TOP.sim.clk
+TOP.sim.rst_n
+TOP.sim.ltssm_state[4:0]
+@c00022
+#{AXI-S RX (Inbound)}
+@28
+TOP.sim.s_axis_rx_tvalid
+TOP.sim.s_axis_rx_tready
+@22
+TOP.sim.s_axis_rx_tdata[63:0]
+@28
+TOP.sim.s_axis_rx_tlast
+@100022
+@c00022
+#{RAM Write Path (Check wr_en!)}
+@28
+TOP.sim.wr_en
+@22
+TOP.sim.wr_addr[10:0]
+TOP.sim.wr_data[31:0]
+@100022
+@c00022
+#{Latching & Completion Trigger}
+@28
+TOP.sim.compl_req_latch
+TOP.sim.compl_done
+@22
+TOP.sim.tag_latch[7:0]
+TOP.sim.addr_latch[12:0]
+@100022
+@c00022
+#{RAM Read Path}
+@22
+TOP.sim.rd_data[31:0]
+@28
+TOP.sim.req_len[9:0]
+@100022
+@c00022
+#{AXI-S TX (Outbound)}
+@28
+TOP.sim.m_axis_tx_tvalid
+TOP.sim.m_axis_tx_tready
+@22
+TOP.sim.m_axis_tx_tdata[63:0]
+@100022
+
