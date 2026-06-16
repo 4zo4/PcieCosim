@@ -72,7 +72,7 @@ static int terminate_req[2] = { -1, -1 };
 static void
 _log(vfu_ctx_t *vfu_ctx UNUSED, UNUSED int level, char const *msg)
 {
-    fprintf(stderr, "vfio: %s\n", msg);
+    fprintf(stderr, "vfio-user: %s\n", msg);
 }
 
 static void _sa_handler(UNUSED int signum)

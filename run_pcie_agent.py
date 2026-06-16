@@ -1,7 +1,22 @@
 #!/usr/bin/env python3
+#
+# This script implements a PCIe Co-Simulation Framework Agent that orchestrates the execution of
+# a QEMU virtual machine with a guest OS connected to a PCIe Cosimulation Bridge and a PCIe RTL simulation endpoint device.
+# The script can launch a packet sniffer to capture low-level interactions over the UDS channel.
+# The agent can perform a series of tests to validate the correct behavior of the PCIe simulation environment,
+# including burst verification, boundary validation, BAR isolation, and MSI interrupt handling.
+# The script is designed to be adaptable to multiple Linux distributions running as guest OSes in the QEMU environment.
+#
+# Copyright (c) 2026, Purple
+# This file is licensed under the MIT License.
+#
 import argparse
+from asyncio import subprocess
+import getpass
 import os
+import subprocess
 import shutil
+import struct
 import sys
 import threading
 import time
@@ -15,6 +30,8 @@ def resolve_relative_paths():
 
     log_dir = os.path.join(project_root, "logs")
     log_file_path = os.path.join(log_dir, "pcie_backend.log")
+    pcap_file_path = os.path.join(log_dir, "vfio-user.pcap")
+    slog_file_path = os.path.join(log_dir, "sockdump.log")
 
     search_anchors = [
         os.path.abspath(os.path.join(project_root, "..")),
@@ -30,28 +47,114 @@ def resolve_relative_paths():
     if image_root is None:
         image_root = os.path.expanduser("~/images")
 
-    return project_root, log_dir, log_file_path, image_root
+    return project_root, log_dir, log_file_path, pcap_file_path, slog_file_path, image_root
 
-def setup_log_directory(dir_name, log_file_path, max_backups=2):
-    """Creates the log directory if it doesn't exist and
-       rotates old logs to preserve a history of executions."""
+def setup_log_directory(dir_name, log_file_path, pcap_file_path, slog_file_path, max_backups=2):
+    """Create the log directory (if it doesn't exist) and
+       rotate old logs to preserve a history of executions."""
     if not os.path.exists(dir_name):
         os.makedirs(dir_name)
         print(f"[Agent] Created logging directory: '{dir_name}/'")
-    for i in range(max_backups - 1, 0, -1):
-        src = f"{log_file_path}.{i}"
-        dst = f"{log_file_path}.{i+1}"
-        if os.path.exists(src):
-            shutil.move(src, dst)
-    if os.path.exists(log_file_path) and os.path.getsize(log_file_path) > 0:
-        shutil.move(log_file_path, f"{log_file_path}.1")
+
+    files = [log_file_path, pcap_file_path, slog_file_path]
+
+    for target in files:
+        for i in range(max_backups - 1, 0, -1):
+            src = f"{target}.{i}"
+            dst = f"{target}.{i+1}"
+            if os.path.exists(src):
+                shutil.move(src, dst)
+        if os.path.exists(target) and os.path.getsize(target) > 0:
+            shutil.move(target, f"{target}.1")
 
     print(f"[Agent] Rotated historical logs (Preserved max backups: {max_backups})")
 
+def start_vfio_user_pkt_sniffer(project_root, pcap_file_path, slog_file_path, socket_path="/tmp/vfio-pcie.sock"):
+    """Launch sockdump as a background root process to capture
+       low-level IPC data going across the UDS channel."""
+    print(f"[Agent] Arming VFIO-User packet sniffer on {socket_path} writing to {pcap_file_path}...")
+
+    sockdump = os.path.join(project_root, "tools", "net", "sockdump.py")
+    os.makedirs(os.path.dirname(pcap_file_path), exist_ok=True)
+
+    cmd = [
+        "sudo", "-n", "python3", sockdump,
+        "--format", "pcap", "--raw",
+        "--output", pcap_file_path,
+        "--flush",
+        socket_path
+    ]
+
+    try:
+        fd = open(slog_file_path, "w")
+        sockdump_env = os.environ.copy()
+        sockdump_env["PYTHONUNBUFFERED"] = "1"
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=fd, # sockdump writes to the user via stderr
+            env=sockdump_env,
+            start_new_session=True,
+            cwd=project_root
+        )
+        proc.slog_fd = fd
+        proc.pcap_file_path = pcap_file_path
+        time.sleep(3.0) # Allow the sniffer enough time to initialize and bind to the socket
+        if proc.poll() is not None:
+            print(f"\033[31m[Agent] ERROR: Sniffer terminated early with exit code {proc.returncode}\033[0m")
+            return None
+        else:
+            print(f"[Agent] Sniffer process started with PID {proc.pid}")
+            return proc
+    except Exception as ex:
+        print(f"\033[31m[Agent] ERROR: Failed to spawn sockdump sniffer: {ex}\033[0m")
+        return None
+
+def stop_vfio_user_pkt_sniffer(sniffer_proc):
+    """Detach the eBPF kernel hooks and save the pcap file."""
+    if sniffer_proc is None:
+        return
+
+    pgid = os.getpgid(sniffer_proc.pid)
+    print(f"[Agent] Disarming VFIO-User packet sniffer")
+    try:
+        start_time = time.time()
+        terminated = False
+        subprocess.run(["sudo", "kill", "-2", f"-{pgid}"], check=False)
+        while time.time() - start_time < 4.0:
+            if sniffer_proc.poll() is not None:
+                terminated = True
+                break
+            time.sleep(0.1)
+
+        if not terminated:
+            print("[Agent] Forcing sniffer kill...")
+            subprocess.run(["sudo", "kill", "-9", f"-{pgid}"], check=False)
+            sniffer_proc.kill()
+            sniffer_proc.wait(timeout=1)
+
+    except Exception as ex:
+        print(f"\n\033[91m[Agent] FATAL: Exception thrown during sniffer teardown: {ex}\033[0m")
+        traceback.print_exc()
+    finally:
+        if hasattr(sniffer_proc, 'slog_fd') and sniffer_proc.slog_fd:
+            sniffer_proc.slog_fd.flush()
+            sniffer_proc.slog_fd.close()
+
+    if os.path.exists(sniffer_proc.pcap_file_path):
+        user = getpass.getuser()
+        group = user
+        os.system(f"sudo chown {user}:{group} {sniffer_proc.pcap_file_path}")
+        os.system(f"sudo chmod 664 {sniffer_proc.pcap_file_path}")
+        size = os.path.getsize(sniffer_proc.pcap_file_path)
+        print(f"[Agent] Packet trace size: {size} bytes committed to log tree")
+    else:
+        print(f"\033[31m[Agent] ERROR: pcap file not found at {sniffer_proc.pcap_file_path}\033[0m")
+
 def continuous_line_drainer(bridge_or_qemu, backend_log):
     """
-    Dedicated thread worker loop that actively drains lines from the terminal,
-    stripping raw ANSI terminal garbage control sequences to preserve log cleanliness.
+    A thread worker loop that actively drains lines from the terminal,
+    stripping raw ANSI terminal garbage control sequences to preserve log clean.
     """
     # Compile regex to match ANSI escape sequences, including Device Status Reports (\x1b\[\d+;\d+R)
     # and general CSI terminal code sequences
@@ -76,7 +179,7 @@ def continuous_line_drainer(bridge_or_qemu, backend_log):
 
 def detect_and_initialize_guest_os_profile(args, qemu):
     """
-    Detects the guest operating system environment type and returns
+    Detect the guest operating system environment type and return
     a configuration profile dictionary.
     """
     print("[Agent] Detecting guest OS environment runtime signature (Awaiting boot stability)...")
@@ -90,8 +193,8 @@ def detect_and_initialize_guest_os_profile(args, qemu):
             r"[\r\n]+\[root@.*\]#\s*$",       # 4: Pre-Authenticated Direct Fedora Root Prompt
             r"pcie-cosim login:\s*$",         # 5: Generic Shared Hostname Login Fallback
         ], timeout=None)
-    except Exception as e:
-        print(f"\033[91m[Agent] ERROR: Early boot tracking exception caught: {e}\033[0m")
+    except Exception as ex:
+        print(f"\033[91m[Agent] ERROR: Early boot tracking exception caught: {ex}\033[0m")
         raise
 
     # PROFILE 1: UBUNTU LINUX
@@ -379,8 +482,8 @@ def main():
 
     args = parser.parse_args()
 
-    project_root, log_dir, log_file_path, image_root = resolve_relative_paths()
-    setup_log_directory(log_dir, log_file_path, max_backups=2)
+    project_root, log_dir, log_file_path, pcap_file_path, slog_file_path, image_root = resolve_relative_paths()
+    setup_log_directory(log_dir, log_file_path, pcap_file_path, slog_file_path, max_backups=2)
     backend_log = open(log_file_path, "wb", buffering=0)
 
     image_root = os.path.join(project_root, "third_party", "os", "images", "linux")
@@ -422,7 +525,7 @@ def main():
         )
     if args.distro != "ubuntu":
         if not os.path.exists(disk_img):
-            print(f"\n\033[91m[Agent] FATAL ERROR: Specified target disk image file asset missing: {disk_img}\033[0m")
+            print(f"\n\033[91m[Agent] FATAL: Specified target disk image file asset missing: {disk_img}\033[0m")
             print("Please run your asset management or symlink tools first.")
             sys.exit(1)
 
@@ -435,7 +538,7 @@ def main():
     )
 
     # Launch the PCIe simulation
-    enableVerbose = False
+    enableVerbose = False # set True/False to enable/disable verbose mode on the libvfio-user internal logging
     bridge_bin = os.path.join(project_root, "build", "pcie_sim")
     if enableVerbose:
         bridge_opt = "-v"
@@ -478,6 +581,13 @@ def main():
         backend_log.close()
         return
 
+    # Launch the packet sniffer to capture VFIO-User traffic over UDS on the channel with QEMU
+    sniffer_proc = None
+    enableSniffer = False # set True/False to enable/disable the VFIO-User packet sniffer
+    if enableSniffer:
+        print(f"[Agent] Launching VFIO-User packet sniffer...")
+        sniffer_proc = start_vfio_user_pkt_sniffer(project_root, pcap_file_path, slog_file_path)
+
     print(f"[Agent] Launching Guest OS Emulation...")
     qemu = pexpect.spawn(qemu_cmd)
     qemu.logfile_read = sys.stdout.buffer
@@ -498,7 +608,7 @@ def main():
         else:
             print("[Agent] Workspace alignment synchronized")
 
-        enableAutomatedTest = True
+        enableAutomatedTest = True # set True/False to enable/disable the automated verification test suite
         testMatrix = [1, 2, 3, 4]
 
         if enableAutomatedTest and testMatrix:
@@ -531,11 +641,12 @@ def main():
     except pexpect.TIMEOUT as te:
         print(f"\n\033[91m[Agent] FATAL: Pexpect Watchdog Timeout Expired: {te}\033[0m")
         traceback.print_exc()
-    except Exception as e:
-        print(f"\n\033[91m[Agent] FATAL: Exception thrown: {e}\033[0m")
+    except Exception as ex:
+        print(f"\n\033[91m[Agent] FATAL: Exception thrown: {ex}\033[0m")
         traceback.print_exc()
     finally:
         print(f"\n\033[96m[Agent] Tearing down infrastructure...\033[0m")
+        stop_vfio_user_pkt_sniffer(sniffer_proc)
         try:
             qemu.terminate(force=True)
             print("[Agent] QEMU stopped.")
