@@ -2,7 +2,7 @@
 
 PCIe co-simulation framework using Verilator and QEMU vfio-user-pci with openPCIE and AXI RAM endpoint RTL blocks.
 
-## Project Architecture
+## Project Structure
 
 - **`common/`**: Core infrastructure logic and logging primitives.
     - `include/`: Shared header templates for logging, packet protocols, and IPC socket channels.
@@ -19,16 +19,41 @@ PCIe co-simulation framework using Verilator and QEMU vfio-user-pci with openPCI
 - `build_vmlinuz.v6.8_pcie_cosim.sh`: Utility script adapting kernel compilation arrays with target co-simulation parameters.
 - `download_os_images.py`: Automation script parsing cloud distribution layers down to the execution image tree.
 - `run_pcie_agent.py`: System automation script wrapping QEMU guests alongside the target RTL Verilated simulation.
+- `sim_waveform.gtkw`: GTKWave waveform trace file to load a generated `sim.vcd`.
 
-## High Level Arch Diagram
+## High Level Architecture Diagram
 
-The PCIe Cosim Bridge acts as a vfio-user server, facilitating communication between the QEMU and the PCIe Endpoint Simulation. When the PCIe Bridge receives packets from QEMU it forwards the PCIe packets to the PCIe Simulation, which completes the PCIe transaction. For no-posted operations like MRd, the PCIe Simulation sends an ACK along with the requested data back to the PCIe Bridge, which then forwards the data to QEMU.
+The PCIe Cosim Bridge acts as a vfio-user server, facilitating communication between the QEMU and the PCIe Endpoint Simulation. When the PCIe Bridge receives a vfio-user message from QEMU it forwards the PCIe packets to the PCIe Simulation, which completes the PCIe transaction. For no-posted operations like MRd, the PCIe Simulation sends an ACK along with the requested data back to the PCIe Bridge, which then forwards the data to QEMU.
+
 ```text
-(QEMU vfio-user-pci) + Linux OS
-  |
-  +-- vfio-user UDS proto --> ..               libvfio-user           soft-TLP
-                              .. (vfio-user Server)<= + PCIe Cosim Bridge + =>(UDS/TCP Client) ..
-                              .. <== UDS/TCP ==> verilated PCIe Sim Endpoint (UDS/TCP Server)
+    +---------------------------------+
+    |                                 |
+    | (QEMU vfio-user-pci) + Linux OS |
+    |                                 |
+    +---------------------------------+
+                    ^
+                    |
+            vfio-user proto (UDS) 
+                    |
+                    v
+    +---------------------------------+
+    |         libvfio-user            |
+    |       (vfio-user Server)        |
+    |                                 |
+    |       PCIe Cosim Bridge         |
+    |                                 |
+    |       (UDS/TCP Client)          |
+    +---------------------------------+
+                    ^^
+                    ||
+            soft-TLP proto (UDS/TCP) 
+                    ||
+                    vV
+    +---------------------------------+
+    |       (UDS/TCP Server)          |
+    |                                 |
+    |   Verilated PCIe Sim Endpoint   |
+    +---------------------------------+
 ```
 
 ## Quick Start
@@ -86,6 +111,10 @@ To download Linux Distribution images do
     /path/to/your/local/PcieCosim/download_os_images.py
 ```
 This installs CirrOS Linux distribution.
+To download Fedora or Ubuntu distribution do
+```text
+    /path/to/your/local/PcieCosim/download_os_images.py --distro fedora|ubuntu
+```
 
 ### 3. Build
 
@@ -100,7 +129,7 @@ To build PCIe co-simulation do
 ```text
     /path/to/your/local/PcieCosim/make
         or
-    /path/to/your/local/PcieCosim/make trace
+    /path/to/your/local/PcieCosim/make trace - to add waveform trace
 ```
 this outputs target executable to `/path/to/your/local/PcieCosim/build/pcie_sim`
 
@@ -111,22 +140,36 @@ Execute the automation wrapper to start PCIe co-simulation with QEMU, bridge dae
     chmod +x /path/to/your/local/PcieCosim/run_pcie_agent.py
     /path/to/your/local/PcieCosim/run_pcie_agent.py
 ```
+This runs co-simulation with CirrOS Linux distribution.
+To run co-simulation with Fedora or Ubuntu distribution do
+```text
+    /path/to/your/local/PcieCosim/run_pcie_agent.py --distro fedora|ubuntu
+```
 
 ### 5. Other
 
 ### 5.1 Optional
 
-### 5.1.1 Wireshark Packet Sniffer
+### 5.1.1 GTKWave
 
-You can install Wireshark and configure a packet sniffer to capture VFIO-User traffic over the UNIX Domain Socket (UDS) channel between QEMU and the PCIe Co-simulation Bridge:
+To visualize PCIe Simulation RTL signalling install GTKWave:
+```text
+    sudo apt install gtkwave -y
+```
+You can see the simulation traces by running `make wave` or `gtkwave sim_waveform.gtkw`.
+
+<img src="images/gtkwave-sim-waveform-trace.png" alt="App Dashboard" width="75%">
+
+### 5.1.2 Wireshark Packet Sniffer
+
+To visualize vfio-user message exchange install Wireshark and configure a packet sniffer to capture VFIO-User traffic over the UNIX Domain Socket (UDS) channel between QEMU and the PCIe Co-simulation Bridge:
 ```text
     sudo apt install -y wireshark
     sudo setcap 'CAP_NET_RAW+eip CAP_NET_ADMIN+eip' /usr/bin/dumpcap
     sudo chmod +x /usr/bin/dumpcap
     newgrp wireshark
 ```
-The `run_pcie_agent.py` automation script uses the `sockdump.py` to capture VFIO-User traffic. The Wireshark dissector for the VFIO-User protocol is named `vfio_user.lua`.
-To install it, copy the dissector file to your local Wireshark plugins directory:
+The `run_pcie_agent.py` automation script uses the `sockdump.py` to capture VFIO-User traffic. The Wireshark dissector for the VFIO-User protocol is named `vfio_user.lua`. To install it, copy the dissector file to your local Wireshark plugins directory:
 ```text
     mkdir -p ~/.config/wireshark/plugins
     cp /path/to/your/local/PcieCosim/tools/net/vfio_user.lua ~/.config/wireshark/plugins/vfio_user.lua
@@ -149,3 +192,6 @@ Next, configure the sudoers file to grant the necessary permissions for executin
 ```
 If you enable the packet sniffer in `run_pcie_agent.py` by setting `enableSniffer = True`, a `vfio-user.pcap` file will be generated in `/path/to/your/local/PcieCosim/logs`.
 
+<img src="images/wireshark_vfio_user_capture.png" alt="App Dashboard" width="50%">
+<img src="images/wireshark_vfio_user_irq_set_req_capture.png" alt="App Dashboard" width="50%">
+<img src="images/wireshark_vfio_user_irq_set_rsp_capture.png" alt="App Dashboard" width="50%">
