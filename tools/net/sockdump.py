@@ -147,6 +147,10 @@ int probe_unix_socket_sendmsg(struct pt_regs *ctx,
         if (i >= iter->nr_segs)
             break;
 
+        if (iov->iov_len == 0) {
+            iov++;
+            continue;
+        }
         packet->len = iov->iov_len;
         packet->flags = 0;
 
