@@ -5,7 +5,7 @@
 # The script can launch a packet sniffer to capture low-level interactions over the UDS channel.
 # The agent can perform a series of tests to validate the correct behavior of the PCIe simulation environment,
 # including burst verification, boundary validation, BAR isolation, and MSI interrupt handling.
-# The script is designed to be adaptable to multiple Linux distributions running as guest OSes in the QEMU environment.
+# The script is adaptable to multiple Linux distributions running as guest OSes in the QEMU environment.
 #
 # Copyright (c) 2026, Purple
 # This file is licensed under the MIT License.
@@ -67,16 +67,17 @@ def setup_log_directory(dir_name, log_file_path, pcap_file_path, slog_file_path,
         if os.path.exists(target) and os.path.getsize(target) > 0:
             shutil.move(target, f"{target}.1")
 
-    print(f"[Agent] Rotated historical logs (Preserved max backups: {max_backups})")
+    print(f"[Agent] Rotated historical logs (max backups: {max_backups})")
 
 def start_vfio_user_pkt_sniffer(project_root, pcap_file_path, slog_file_path, socket_path="/tmp/vfio-pcie.sock"):
     """Launch sockdump as a background root process to capture
        low-level IPC data going across the UDS channel."""
-    print(f"[Agent] Arming VFIO-User packet sniffer on {socket_path} writing to {pcap_file_path}...")
+    print(f"[Agent] Arming vfio-user packet sniffer on {socket_path} writing to {pcap_file_path}...")
 
     sockdump = os.path.join(project_root, "tools", "net", "sockdump.py")
     os.makedirs(os.path.dirname(pcap_file_path), exist_ok=True)
 
+    print(f"[Agent] Starting {sockdump} writing its I/O to {slog_file_path}", flush=True)
     cmd = [
         "sudo", "-n", "python3", sockdump,
         "--format", "pcap", "--raw",
@@ -479,7 +480,18 @@ def main():
         default="cirros",
         help="Specify the target guest OS distribution profile context to execute (default: cirros)"
     )
-
+    parser.add_argument(
+        "--sniffer", action="store_true",
+        help="Launch packet sniffer to capture QEMU vfio-user traffic"
+    )
+    parser.add_argument(
+        "--verbose", action="store_true",
+        help="Enable verbose for the PCIe Co-Simulation Bridge execution"
+    )
+    parser.add_argument(
+        "--bridge", action="store_true",
+        help="Launch standalone PCIe Co-Simulation Bridge without QEMU guest OS"
+    )
     args = parser.parse_args()
 
     project_root, log_dir, log_file_path, pcap_file_path, slog_file_path, image_root = resolve_relative_paths()
@@ -534,16 +546,17 @@ def main():
         f"{base_cmd} "
         f"{append_args} "
         f"-device pcie-root-port,id=pcie.1 "
-        f"-device '{{\"driver\": \"vfio-user-pci\", \"socket\": {{\"type\": \"unix\", \"path\": \"/tmp/vfio-pcie.sock\"}}, \"bus\": \"pcie.1\", \"id\": \"my_dev\"}}'"
+        f"-device '{{\"driver\": \"vfio-user-pci\", \"socket\": {{\"type\": \"unix\", \"path\": \"/tmp/vfio-pcie.sock\"}}, \"bus\": \"pcie.1\", \"id\": \"pcie_cosim\"}}'"
     )
 
     # Launch the PCIe simulation
-    enableVerbose = False # set True/False to enable/disable verbose mode on the libvfio-user internal logging
+    bridge_flags = []
+    if args.verbose:
+        bridge_flags.append("v")
+    if args.bridge:
+        bridge_flags.append("r")
+    bridge_opt = f"-{''.join(bridge_flags)}" if bridge_flags else ""
     bridge_bin = os.path.join(project_root, "build", "pcie_sim")
-    if enableVerbose:
-        bridge_opt = "-v"
-    else:
-        bridge_opt = ""
     bridge = pexpect.spawn(f"stdbuf -oL {bridge_bin} {bridge_opt}")
 
     # Launch background continuous line processor
@@ -581,10 +594,33 @@ def main():
         backend_log.close()
         return
 
+    if args.bridge:
+        print(f"[Agent] PCIe-Bridge launched in standalone mode. Press Ctrl+] to exit.")
+        time.sleep(0.1)
+        bridge.interact(escape_character='\x1d')
+        try:
+            if bridge.isalive():
+                print("[Agent] Sending SIGINT to PCIe-Bridge...")
+                bridge.kill(2)
+                bridge.expect(pexpect.EOF, timeout=2)
+                print("[Agent] PCIe-Bridge reaped gracefully.")
+        except pexpect.TIMEOUT:
+            print("\n[Agent] WARNING: PCIe-Bridge is frozen! Forcing kill...")
+            bridge.terminate(force=True)
+            for sock in ["/tmp/vfio-pcie.sock", "/tmp/pcie-cosim1.sock", "/tmp/pcie-cosim2.sock"]:
+                if os.path.exists(sock):
+                    try: os.unlink(sock)
+                    except Exception: pass
+        except pexpect.EOF:
+            print("[Agent] PCIe-Bridge closed channel.")
+
+        backend_log.close()
+        print("[Agent] Teardown complete.")
+        return
+
     # Launch the packet sniffer to capture VFIO-User traffic over UDS on the channel with QEMU
     sniffer_proc = None
-    enableSniffer = False # set True/False to enable/disable the VFIO-User packet sniffer
-    if enableSniffer:
+    if args.sniffer:
         print(f"[Agent] Launching VFIO-User packet sniffer...")
         sniffer_proc = start_vfio_user_pkt_sniffer(project_root, pcap_file_path, slog_file_path)
 

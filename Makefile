@@ -54,6 +54,7 @@ INC_FLAGS = \
 # NFLAGS - Normal Flags
 # DFLAGS - Debug Flags
 # VFLAGS - Verilation Flags
+# OFLAGS - Optimization Flags
 # CFLAGS - Compilation Flags
 # LDFLAGS - Linker Flags
 HEFLAGS = -DENABLE_LOGS=$(ENABLE_HW_LOGS)
@@ -61,7 +62,8 @@ SEFLAGS = -DENABLE_SW_LOGS=$(ENABLE_SW_LOGS) -DLOG_LEVEL=$(LOG_LEVEL) -DENABLE_W
 NFLAGS = -Wno-WIDTHTRUNC -Wno-WIDTHEXPAND -Wno-CASEX -Wno-COMBDLY -Wno-UNOPTFLAT --no-timing -Wno-fatal
 DFLAGS = --converge-limit 2000 --x-assign unique --x-initial unique -DVL_DEBUG
 VFLAGS = $(strip -I$(OPEN_PCIE_EP_PATH) $(NFLAGS) $(HEFLAGS))
-CFLAGS = $(strip -fPIC -g -O3 -fcoroutines $(INC_FLAGS) $(SEFLAGS))
+OFLAGS = -g -O3 # -g -Og
+CFLAGS = $(strip -fPIC -fcoroutines $(OEFLAGS) $(INC_FLAGS) $(SEFLAGS))
 LDFLAGS = -lrt -lpthread
 LDFLAGS += -L$(LIBVFIO_PATH)/build/lib -Wl,-rpath,$(LIBVFIO_PATH)/build/lib -lvfio-user
 

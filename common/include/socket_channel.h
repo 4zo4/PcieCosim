@@ -28,7 +28,7 @@ public:
     bool peek;
     bool connected; // is protocol connected
     int  fd; // socket file descriptor
-    const char* label; // transport label for logging
+    const char* trans; // transport label for logging
 };
 
 class SocketChannel
@@ -53,7 +53,7 @@ private:
 
 int doReceive(int fd, char* dbuf, const size_t len, int flags = 0);
 extern const char* transLabel[]; // transport labels for logging
-extern const char* channelLabel[]; // channel labels for logging
+extern const char* channelName[]; // channel labels for logging
 
 extern SocketChannel *socketChannel;
 

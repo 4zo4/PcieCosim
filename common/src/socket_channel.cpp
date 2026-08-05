@@ -23,7 +23,7 @@
 #include "socket_channel.h"
 
 const char* transLabel[] = { "NONE", "UDS", "TCP"}; // transport labels for logging
-const char* channelLabel[] = { "Main", "Async"}; // channel labels for logging
+const char* channelName[] = { "Main", "Async"}; // channel labels for logging
 
 int doReceive(int fd, char* dbuf, const size_t len, int flags)
 {
@@ -59,7 +59,7 @@ Socket::Socket()
     this->peek = false;
     this->connected = false;
     this->fd = -1;
-    this->label = transLabel[static_cast<uint8_t>(this->mode)];
+    this->trans = transLabel[static_cast<uint8_t>(this->mode)];
 }
 
 SocketChannel::SocketChannel()
@@ -86,7 +86,7 @@ int SocketChannel::connect(int channel, const char* sock)
 
     if (::connect(this->socket[channel].fd, (struct sockaddr*)&addr, sizeof(addr)) == 0) {
         this->socket[channel].mode = Mode::UDS;
-        this->socket[channel].label = transLabel[static_cast<uint8_t>(Mode::UDS)];
+        this->socket[channel].trans = transLabel[static_cast<uint8_t>(Mode::UDS)];
         return 0;
     }
 
@@ -126,7 +126,7 @@ int SocketChannel::connect(int channel, const char* address, int port)
 
     if (::connect(this->socket[channel].fd, (struct sockaddr*)&addr, sizeof(addr)) == 0) {
         this->socket[channel].mode = Mode::TCP;
-        this->socket[channel].label = transLabel[static_cast<uint8_t>(Mode::TCP)];
+        this->socket[channel].trans = transLabel[static_cast<uint8_t>(Mode::TCP)];
         return 0;
     }
 
@@ -166,7 +166,7 @@ int SocketChannel::connect(const SocketCfg_t *cfg)
 
     if (ret != 0) {
         LOG_ERROR("PCIe-Bridge","%s Connection on socket %d failed, aborting",
-            this->socket[i].label, this->socket[i].fd);
+            this->socket[i].trans, this->socket[i].fd);
         return -1;
     }
 
@@ -174,11 +174,14 @@ int SocketChannel::connect(const SocketCfg_t *cfg)
         ret = handshake(i);
         if (ret != 0) {
             LOG_ERROR("PCIe-Bridge","Handshake failed on %s socket %d, aborting",
-                this->socket[i].label, this->socket[i].fd);
+                this->socket[i].trans, this->socket[i].fd);
             return -1;
         }
     }
 
+    LOG_DEBUG("PCIe-Bridge","Established %s channel on %s socket %d and %s channel on %s socket %d ",
+        channelName[0], this->socket[0].trans, this->socket[0].fd,
+        channelName[1], this->socket[1].trans, this->socket[1].fd);
     this->channel = MAIN_CHANNEL;
     return 0;
 }
@@ -191,17 +194,17 @@ int SocketChannel::handshake(int channel)
 
     if (pkt.type == PktType::ACK) {
         LOG_DEBUG("PCIe-Bridge","-> Handshake over %s received",
-            this->socket[channel].label);
+            this->socket[channel].trans);
         send(Protocol(PktType::ACK, 0, 0, pkt.tag));
         LOG_DEBUG("PCIe-Bridge","<- Handshake over %s acked",
-            this->socket[channel].label);
+            this->socket[channel].trans);
         this->socket[channel].connected = true;
         LOG_INFO("PCIe-Bridge","%s Connection on socket %d %s channel %d synced",
-            this->socket[channel].label, this->socket[channel].fd, channelLabel[channel], channel);
+            this->socket[channel].trans, this->socket[channel].fd, channelName[channel], channel);
     } else {
         send(Protocol(PktType::NACK, 0, 0, pkt.tag));
-        LOG_ERROR("PCIe-Bridge","%s Connection on socket %d channel %d failed",
-            this->socket[channel].label, this->socket[channel].fd, channelLabel[channel], channel);
+        LOG_ERROR("PCIe-Bridge","%s Connection on socket %d %s channel %d failed",
+            this->socket[channel].trans, this->socket[channel].fd, channelName[channel], channel);
         return -1;
     }
     return 0;
@@ -215,11 +218,11 @@ Protocol SocketChannel::receive(char *dbuf)
     if (bytesRead < 0 || static_cast<size_t>(bytesRead) != sizeof(Protocol)) {
         pkt.type = U8(PktType::INVALID);
         LOG_ERROR("PCIe-Bridge","%s Connection on socket %d %s channel %d %s",
-                this->socket[channel].label, this->socket[channel].fd, channelLabel[channel], channel,
+                this->socket[channel].trans, this->socket[channel].fd, channelName[channel], channel,
                 (bytesRead == -1 ? "error" : (bytesRead == -2 ? "shut down" :
                 (bytesRead == -3 ? "timeout" : "closed"))));
         fprintf(stderr, "receive:%d: failed on socket %d channel %s %d: %s (errno %d)\n", __LINE__,
-                this->socket[channel].fd, channelLabel[channel], channel, strerror(errno), errno);
+                this->socket[channel].fd, channelName[channel], channel, strerror(errno), errno);
         return pkt;
     } else {
         LOG_PKT(Dir::RX, pkt);
@@ -230,11 +233,11 @@ Protocol SocketChannel::receive(char *dbuf)
         if (bytesRead < 0 || static_cast<size_t>(bytesRead) != pkt.count) {
             pkt.type = U8(PktType::INVALID);
             LOG_ERROR("PCIe-Bridge","%s Connection on socket %d %s channel %d %s while receiving data",
-                    this->socket[channel].label, this->socket[channel].fd, channel,
+                    this->socket[channel].trans, this->socket[channel].fd, channel,
                     (bytesRead == -1 ? "error" : (bytesRead == -2 ? "shut down" :
                     (bytesRead == -3 ? "timeout" : "closed"))));
             fprintf(stderr, "receive:%d: failed on socket %d %s channel %d: %s (errno %d)\n", __LINE__,
-                    this->socket[channel].fd, channelLabel[channel], channel, strerror(errno), errno);
+                    this->socket[channel].fd, channelName[channel], channel, strerror(errno), errno);
         }
     }
     return pkt;
@@ -260,12 +263,14 @@ void SocketChannel::send(const Protocol& pkt, const void* data) const
     };
 
     ssize_t len = pkt.count > 0 && data ? sizeof(Protocol) + pkt.count : sizeof(Protocol);
+    LOG_DEBUG("PCIe-Bridge","Sending %ld bytes packet on %s channel %s %d", len,
+            channelName[channel], this->socket[channel].trans, this->socket[channel].fd);
     ssize_t sent = ::sendmsg(this->socket[channel].fd, &msg, MSG_NOSIGNAL);
     if (sent < len) {
         LOG_ERROR("PCIe-Bridge","send failed on %s socket %d %s channel %d: "
                 "%s (errno %d), bytes sent %d instead %u",
-                this->socket[channel].label, this->socket[channel].fd,
-                channelLabel[channel], channel, strerror(errno), errno, sent, len);
+                this->socket[channel].trans, this->socket[channel].fd,
+                channelName[channel], channel, strerror(errno), errno, sent, len);
     }
 }
 
@@ -282,12 +287,14 @@ void SocketChannel::send(const Protocol& pkt) const
         .msg_iovlen = 1,
     };
 
+    LOG_DEBUG("PCIe-Bridge","Sending %ld bytes packet on %s channel %s %d", (ssize_t)(sizeof(Protocol)),
+            channelName[channel], this->socket[channel].trans, this->socket[channel].fd);
     ssize_t sent = ::sendmsg(this->socket[channel].fd, &msg, MSG_NOSIGNAL);
     if (sent < (ssize_t)(sizeof(Protocol))) {
         LOG_ERROR("PCIe-Bridge","send failed on %s socket %d %s channel %d: "
                 "%s (errno %d), bytes sent %d instead %u",
-                this->socket[channel].label, this->socket[channel].fd,
-                channelLabel[channel], channel, strerror(errno), errno, sent, sizeof(Protocol));
+                this->socket[channel].trans, this->socket[channel].fd,
+                channelName[channel], channel, strerror(errno), errno, sent, sizeof(Protocol));
     }
 }
 
@@ -301,7 +308,7 @@ int SocketChannel::setTimeout(int channel, int timeout_ms)
     int fd = this->socket[channel].fd;
     if (fd < 0) {
         LOG_ERROR("PCIe-Bridge","Cannot set timeout: invalid socket "
-                "file descriptor %d for channel %s %d", fd, channelLabel[channel], channel);
+                "file descriptor %d for channel %s %d", fd, channelName[channel], channel);
         return -1;
     }
 
@@ -313,13 +320,13 @@ int SocketChannel::setTimeout(int channel, int timeout_ms)
         LOG_ERROR("PCIe-Bridge","setsockopt SO_RCVTIMEO failed on socket %d "
                 "channel %d: %s (errno %d)", fd, channel, strerror(errno), errno);
         fprintf(stderr, "setTimeout:%d: failed on socket %d %s channel %d: %s (errno %d)\n", __LINE__,
-                this->socket[channel].fd, channelLabel[channel], channel, strerror(errno), errno);
+                this->socket[channel].fd, channelName[channel], channel, strerror(errno), errno);
         return -1;
     }
 
     LOG_DEBUG("PCIe-Bridge","Timeout set to %d ms on %s socket %d %s channel %d",
-              timeout_ms == BLOCK ? 0 : timeout_ms, this->socket[this->channel].label,
-              fd, channelLabel[channel], channel);
+              timeout_ms == BLOCK ? 0 : timeout_ms, this->socket[this->channel].trans,
+              fd, channelName[channel], channel);
     return 0;
 }
 
@@ -354,9 +361,9 @@ Protocol SocketChannel::asyncListen(char *dbuf)
             this->channel = ASYNC_CHANNEL;
             pkt = this->receive(dbuf);
             if (!isAsync(pkt.type)) {
-                LOG_ERROR("PCIe-Bridge","%s received %s packet on socket %d channel %s %d",
-                    this->socket[ASYNC_CHANNEL].label, pktTypeToStr(pkt.type),
-                    channelLabel[ASYNC_CHANNEL], ASYNC_CHANNEL);
+                LOG_ERROR("PCIe-Bridge","%s received %s packet on socket %d %s channel %d",
+                    this->socket[ASYNC_CHANNEL].trans, pktTypeToStr(pkt.type), fds[0].fd,
+                    channelName[ASYNC_CHANNEL], ASYNC_CHANNEL);
                 pkt.type = U8(PktType::INVALID);
             }
             return pkt;

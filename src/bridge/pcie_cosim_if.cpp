@@ -7,6 +7,7 @@
  * Copyright (c) 2026, Purple
  * This file is licensed under the MIT License.
  */
+#include <fcntl.h>
 #include <iostream>
 #include <sys/socket.h>
 #include <sys/prctl.h>
@@ -40,11 +41,16 @@ void idleRtlSim();
 void terminateRtlSim();
 
 typedef struct channel_s {
-    const char* label; // transport label for logging
+    const char* trans; // transport label for logging
     int socket[2]; // socket[0] is the listening socket, socket[1] is the accepted connection socket
 } Channel_t;
 
 #if defined(ENABLE_LOGS) && (ENABLE_LOGS == 1)
+#if (LOG_LEVEL == LOG_LEVEL_DEBUG)
+#define LOG_CHANNEL_DEBUG(channel, x, prefix) logChannel(LOG_LEVEL_DEBUG, channel, x, prefix)
+#else
+#define LOG_CHANNEL_DEBUG(channel, x, prefix) NOP()
+#endif
 static inline void logChannel(const int level, Channel_t *channel, int x, const char* prefix)
 {
     if (level > LOG_LEVEL)
@@ -55,7 +61,7 @@ static inline void logChannel(const int level, Channel_t *channel, int x, const 
             if (!once) {
                 printf("%s", prefix);
             }
-            printf("%s%s socket %d", once ? " and " : "", channel[i].label, channel[i].socket[x]);
+            printf("%s%s channel %s socket %d", once ? " and " : "", channelName[i], channel[i].trans, channel[i].socket[x]);
             once = true;
         }
     }
@@ -148,7 +154,7 @@ void handleSigint(int sig)
 {
     (void)sig;
     const char msg[] = "[PCIe-SIM] received SIGINT. Waiting for NACK from PCIe-Bridge to terminate.\n";
-    write(STDOUT_FILENO, msg, sizeof(msg)); 
+    write(STDOUT_FILENO, msg, sizeof(msg));
 }
 
 // transOrder[i] gives the index of the transport that completed the handshake i-th (0 or 1)
@@ -169,20 +175,20 @@ void sendAsync(PktType type, const uint32_t *data, uint16_t count)
     if (sent < size) {
         if (err == -1) {
             size += (ssize_t)sizeof(Protocol);
-        } 
+        }
         err = -1;
     }
     if (err) {
         LOG_ERROR("PCIe-SIM","send failed on socket %d %s channel %d: "
             "%s (errno %d), bytes sent %d instead %u",
-            activeChannel[ASYNC_CHANNEL], channelLabel[ASYNC_CHANNEL], ASYNC_CHANNEL,
+            activeChannel[ASYNC_CHANNEL], channelName[ASYNC_CHANNEL], ASYNC_CHANNEL,
             strerror(errno), errno, sent, size);
         fprintf(stderr, "send failed on socket %d %s channel %d: %s (errno %d)\n",
-            activeChannel[ASYNC_CHANNEL], channelLabel[ASYNC_CHANNEL], ASYNC_CHANNEL,
+            activeChannel[ASYNC_CHANNEL], channelName[ASYNC_CHANNEL], ASYNC_CHANNEL,
             strerror(errno), errno);
     } else {
         LOG_DEBUG("PCIe-SIM","on socket %d %s channel %d",
-            activeChannel[ASYNC_CHANNEL], channelLabel[ASYNC_CHANNEL], ASYNC_CHANNEL);
+            activeChannel[ASYNC_CHANNEL], channelName[ASYNC_CHANNEL], ASYNC_CHANNEL);
         LOG_PKT(Dir::TX, pkt, (const char*)data);
     }
 }
@@ -193,7 +199,7 @@ int doAccept(Channel_t *channel)
     int sock = -1;
     int next = 0;
 
-    logChannel(LOG_LEVEL_INFO, channel, 0, "[PCIe-SIM] Waiting for connection on ");
+    logChannel(LOG_LEVEL_INFO, channel, 0, "[PCIe-SIM] Listening for connection on ");
 
     while (next < 2) {
         int ret = poll(fds, 2, MAX_WAIT_TIME);
@@ -209,19 +215,31 @@ int doAccept(Channel_t *channel)
 
         for (int i = 0; i < 2; i++) {
             if (fds[i].fd > 0 && (fds[i].revents & POLLIN)) {
-                sock = accept(fds[i].fd, NULL, NULL);
-                if (sock < 0) {
+                int tmp = accept(fds[i].fd, NULL, NULL);
+                if (tmp < 0) {
                     LOG_ERROR("PCIe-SIM","ERROR: %s (errno %d) on %s socket %d %s channel %d while accepting connection",
-                              strerror(errno), errno, channel[i].label, fds[i].fd, channelLabel[i], i);
+                              strerror(errno), errno, channel[i].trans, fds[i].fd, channelName[i], i);
                     continue;
+                }
+
+                sock = fcntl(tmp, F_DUPFD, 80 + i);
+                close(tmp);
+                if (sock < 0) {
+                    perror("[PCIe-SIM] fcntl F_DUPFD failed");
+                    exit(1);
                 }
                 channel[i].socket[1] = sock;
                 transOrder[next++] = i;
                 LOG_DEBUG("PCIe-SIM","Accepted connection on %s socket %d %s channel %d",
-                            channel[i].label, sock, channelLabel[i], i);
+                            channel[i].trans, sock, channelName[i], i);
                 fds[i].fd = -1;
-                close(channel[i].socket[0]);
             }
+        }
+    }
+
+    for (int i = 0; i < 2; i++) {
+        if (channel[i].socket[0] > 0) {
+            close(channel[i].socket[0]);
         }
     }
     return 0;
@@ -256,7 +274,7 @@ int receive(Protocol& pkt, Buf& dbuf, Channel_t *channel)
                         activeSocket = -1;
                     }
                     LOG_ERROR("PCIe-SIM","ERROR: %s (errno %d) closing %s socket %d %s channel %d",
-                              strerror(errno), errno, channel[i].label, fds[i].fd, channelLabel[i], i);
+                              strerror(errno), errno, channel[i].trans, fds[i].fd, channelName[i], i);
                     fds[i].fd = -1;
                     pkt.type = U8(PktType::INVALID);
                     return 0;
@@ -280,13 +298,14 @@ int receive(Protocol& pkt, Buf& dbuf, Channel_t *channel)
                             activeSocket = -1;
                         }
                         LOG_ERROR("PCIe-SIM","ERROR: %s (errno %d) closing %s socket %d %s channel %d",
-                                  strerror(errno), errno, channel[i].label, fds[i].fd, channelLabel[i], i);
+                                  strerror(errno), errno, channel[i].trans, fds[i].fd, channelName[i], i);
                         fds[i].fd = -1;
                         pkt.type = U8(PktType::INVALID);
                         return 0;
                     }
-                    activeSocket = fds[i].fd;
                 }
+                activeSocket = fds[i].fd;
+                LOG_DEBUG("PCIe-SIM","Received packet on %s channel %s socket %d", channelName[i], channel[i].trans, activeSocket);
                 return 0;
             }
         }
@@ -433,7 +452,7 @@ void runPcieCosim(const SocketCfg_t *cfg)
                 return 0;
         }
 
-        logChannel(LOG_LEVEL_DEBUG, channel, 1, "[PCIe-SIM] exchange: waiting for packets on ");
+        LOG_CHANNEL_DEBUG(channel, 1, "[PCIe-SIM] exchange: waiting for packets on ");
 
         Protocol pkt = {}; dbuf.len = 0;
         int ret = receive(pkt, dbuf, channel);
@@ -453,6 +472,7 @@ void runPcieCosim(const SocketCfg_t *cfg)
                 p.count = pkt.count;
                 p.tag = pkt.tag;
                 LOG_PKT(Dir::TX, p, "exchange", dbuf.data());
+                LOG_DEBUG("PCIe-SIM","Sending ACK on socket %d", activeSocket);
                 ssize_t sent = ::send(activeSocket, &p, sizeof(Protocol), MSG_NOSIGNAL);
                 if (sent < (ssize_t)sizeof(Protocol)) {
                     std::cerr << "exchange:" << __LINE__ << ": bytes sent " << sent <<
@@ -461,8 +481,9 @@ void runPcieCosim(const SocketCfg_t *cfg)
                             activeSocket, channel[0].socket[1] == activeSocket ? 0 : 1, strerror(errno), errno);
                     return -2;
                 }
-                if (dbuf.len == p.count && p.count > 0)
+                if (dbuf.len == p.count && p.count > 0) {
                     ::send(activeSocket, dbuf.data(), p.count, 0);
+                }
             } else if (pkt.type == PktType::NACK) {
                 std::cout << "[PCIe-SIM] disconnected" << std::endl;
                 connected = false;
@@ -503,15 +524,15 @@ void runPcieCosim(const SocketCfg_t *cfg)
         int currentSocket = channel[x].socket[1];
         if (currentSocket > 0) {
             activeSocket = currentSocket;
-            LOG_DEBUG("PCIe-SIM","Handshake on %s socket %d", channel[x].label, currentSocket);
+            LOG_DEBUG("PCIe-SIM","Handshake on %s socket %d", channel[x].trans, currentSocket);
             int ret = exchange(PktType::ACK, PktType::ACK, x + 1);
             if (ret != 0) {
                 LOG_ERROR("PCIe-SIM","Handshake failed on %s socket %d (error %d), aborting",
-                        channel[x].label, currentSocket, ret);
+                        channel[x].trans, currentSocket, ret);
                 goto waitPeerTerminate;
             }
             activeChannel[x] = currentSocket;
-            LOG_DEBUG("PCIe-SIM","Handshake on %s socket %d done", channel[x].label, currentSocket);
+            LOG_DEBUG("PCIe-SIM","Handshake on %s socket %d done", channel[x].trans, currentSocket);
         }
     }
 

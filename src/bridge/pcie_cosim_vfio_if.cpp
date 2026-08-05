@@ -27,7 +27,7 @@
  *  OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH
  *  DAMAGE.
  *
- * Original code from: https://github.com/nutanix/libvfio-user/blob/master/samples/gpio-pci-idio-16.c 
+ * Original code from: https://github.com/nutanix/libvfio-user/blob/master/samples/gpio-pci-idio-16.c
  * Modified by Purple, 2026
  */
 
@@ -93,10 +93,24 @@ dma_unregister(UNUSED vfu_ctx_t *vfu_ctx, UNUSED vfu_dma_info_t *info)
 {
 }
 
+static void
+print_usage(UNUSED int argc, char *argv[])
+{
+    fprintf(stderr, "Usage: %s [-R] [-v] [-r] [-h]\n", argv[0]);
+    fprintf(stderr, "Options:\n");
+    fprintf(stderr, "  -R  Disable restart\n");
+    fprintf(stderr, "  -v  Enable verbose logging\n");
+    fprintf(stderr, "  -r  Enable memory region for RTOS\n");
+    fprintf(stderr, "  -h  Show this help message and exit\n");
+    exit(EXIT_FAILURE);
+}
+
 int
 main(int argc, char *argv[])
 {
     int ret;
+    bool help = false;
+    bool rtos = false;
     bool verbose = false;
     bool restart = true;
     struct sigaction act = {0};
@@ -104,33 +118,33 @@ main(int argc, char *argv[])
     vfu_ctx_t *vfu_ctx;
     int opt;
 
-     while ((opt = getopt(argc, argv, "Rv")) != -1) {
+     while ((opt = getopt(argc, argv, "Rvrh")) != -1) {
         switch (opt) {
             case 'R':
                 restart = false;
                 break;
+            case 'r':
+                rtos = true;
+                break;
             case 'v':
                 verbose = true;
                 break;
-            default: /* '?' */
-                fprintf(stderr, "Usage: %s [-Rv]\n", argv[0]);
-                exit(EXIT_FAILURE);
+            case 'h':
+                help = true;
+                break;
+            case '?':
+            default:
+                print_usage(argc, argv);
         }
     }
 
-    while ((opt = getopt(argc, argv, "Rv")) != -1) {
-        switch (opt) {
-            case 'R':
-                restart = false;
-                break;
-            case 'v':
-                verbose = true;
-                break;
-            default: /* '?' */
-                fprintf(stderr, "Usage: %s [-Rv]\n", argv[0]);
-                exit(EXIT_FAILURE);
+    if (help) {
+        if (!restart || rtos || verbose || argc > 2) {
+            fprintf(stderr, "Error: Cannot combine -h with other options.\n");
         }
+        print_usage(argc, argv);
     }
+
     sigset_t set;
     sigemptyset(&set);
     sigaddset(&set, SIGINT);
@@ -182,10 +196,16 @@ main(int argc, char *argv[])
         err(EXIT_FAILURE, "failed to initialize PCIe bridge");
     }
 
+    uint32_t flags = VFU_REGION_FLAG_RW | VFU_REGION_FLAG_ALWAYS_CB;
+
+    if (rtos) {
+        flags |= VFU_REGION_FLAG_MEM;
+    }
+
     ret = vfu_setup_region(vfu_ctx, VFU_PCI_DEV_BAR0_REGION_IDX,
                            0x1000,      // 4KB size
                            pcie_bridge_bar0, // The IPC-triggering callback
-                           VFU_REGION_FLAG_RW | VFU_REGION_FLAG_ALWAYS_CB,
+                           flags,       // region config flags
                            NULL, 0,     // NO MMAP (Force intercept)
                            -1, 0);      // No direct FD
     if (ret < 0) {
@@ -228,7 +248,7 @@ main(int argc, char *argv[])
 
     ret = vfu_pci_add_capability(vfu_ctx, 0,
                                  VFU_CAP_FLAG_NONE,   // Default access rules
-                                 (uint8_t*)&msi_cap); // Pointer to MSI Capability structure 
+                                 (uint8_t*)&msi_cap); // Pointer to MSI Capability structure
     if (ret < 0) {
         err(EXIT_FAILURE, "failed to add MSI capability to configuration space");
     }
@@ -252,7 +272,7 @@ main(int argc, char *argv[])
 
         ret = test_pcie_bridge();
         {
-            constexpr auto msg = "[PCIe-Bridge] Terminated\n"sv; 
+            constexpr auto msg = "[PCIe-Bridge] Terminated\n"sv;
             write(STDOUT_FILENO, msg.data(), msg.size());
         }
         unlink(VFIO_PCIE_SOCK);
@@ -304,14 +324,14 @@ void pcie_bridge_terminate_monitor()
     }
 
     {
-        constexpr auto msg = "[PCIe-Bridge] received SIGINT. Terminating...\n"sv; 
-        write(STDOUT_FILENO, msg.data(), msg.size()); 
+        constexpr auto msg = "[PCIe-Bridge] received SIGINT. Terminating...\n"sv;
+        write(STDOUT_FILENO, msg.data(), msg.size());
     }
 
     pcie_bridge_disconnect();
 
     {
-        constexpr auto msg = "[PCIe-Bridge] Terminated\n"sv; 
+        constexpr auto msg = "[PCIe-Bridge] Terminated\n"sv;
         write(STDOUT_FILENO, msg.data(), msg.size());
     }
 

@@ -125,7 +125,7 @@ static ssize_t pcie_bridge(uint16_t bar_id, char *buf, size_t count, loff_t offs
         } else {
             LOG_ERROR("PCIe-Bridge","[PKT][ERROR] type %d tag %d count %d",
                     resp.type, resp.tag, resp.count);
-            return 0;
+            return -EIO; 
         }
     }
 }
