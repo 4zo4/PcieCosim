@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-LINUX_TOP_DIR="${LINUX_TOP_DIR:-/home/purple/kernel/linux}"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE}")" && pwd)"
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+LINUX_TOP_DIR="${SCRIPT_DIR}/third_party/os/linux"
 
 show_usage() {
     echo "Usage: $(basename "$0") [OPTIONS]"
@@ -37,7 +37,7 @@ fi
 
 if [ ! -d "${LINUX_TOP_DIR}" ]; then
     echo -e "\033[91m[Build] FATAL ERROR: Path does not exist: LINUX_TOP_DIR=${LINUX_TOP_DIR}\033[0m"
-    echo "Please set the correct path or export the LINUX_TOP_DIR variable."
+    echo "Please update your workspace using: ./workspace_setup.py or export the LINUX_TOP_DIR variable."
     exit 1
 fi
 

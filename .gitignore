@@ -1,5 +1,6 @@
 *.swp
 .vscode/
+configs.json
 logs/*
 !logs/.gitkeep
 build/
@@ -7,6 +8,7 @@ src/bridge/build/
 third_party/*
 third_party/lib/libvfio-user
 third_party/hw/openPCIE
+third_party/os/linux
 !third_party/hw/.gitkeep
 !third_party/lib/.gitkeep
 !third_party/**/

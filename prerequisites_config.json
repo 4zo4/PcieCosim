@@ -1,0 +1,74 @@
+{
+  "default_paths": {
+    "clone_tools_dir": "~/tools",
+    "clone_os_dir": "~/kernel",
+    "clone_soc_dir": "~/soc"
+  },
+  "base_requirements": {
+    "packages": [
+      "git",
+      "wget",
+      "build-essential",
+      "ccache",
+      "numactl",
+      "perl",
+      "libfl-dev",
+      "zlib1g-dev",
+      "libgoogle-perftools-dev",
+      "libglib2.0-dev",
+      "libpixman-1-dev",
+      "libslirp-dev",
+      "meson",
+      "ninja-build",
+      "libjson-c-dev",
+      "libcmocka-dev",
+      "gcc-multilib",
+      "g++-multilib",
+      "help2man",
+      "bison",
+      "flex",
+      "autoconf",
+      "libjemalloc-dev",
+      "liblz4-dev"
+    ],
+    "repos": [
+      { "path": "qemu/qemu", "id": "qemu", "type": "tools", "tag": "v11.1.0", "clone_depth": 1 },
+      { "path": "verilator/verilator", "id": "verilator", "type": "tools", "tag": "v5.050", "clone_depth": 1 },
+      { "path": "nutanix/libvfio-user", "id": "libvfiouser", "type": "tools" },
+      { "path": "chili-chips-ba/openPCIE", "id": "openpcie", "type": "soc", "sparse": ["2.amd-rtl-with-Vivado-build", "2.rtl"] }
+    ]
+  },
+  "scopes": [
+    {
+      "id": "linux",
+      "name": "Linux kernel source tree",
+      "description": "Clones the upstream Linux source tree and provisions custom target tracking branch",
+      "packages": ["bc", "dwarves", "libssl-dev", "libelf-dev", "openssl", "guestfs-tools"],
+      "repos": [
+        {
+          "id": "linux",
+          "path": "torvalds/linux",
+          "type": "os",
+          "tag": "v6.8",
+          "branch": "v6.8_pcie_cosim",
+          "clone_depth": 1,
+          "patch": "third_party/os/v6.8_pcie_cosim_patch.patch"
+        }
+      ]
+    },
+    {
+      "id": "networking",
+      "name": "PCIe Co-Simulation Networking",
+      "description": "Packet inspection tools, socket utilities, and virtualization interface dependencies",
+      "packages": ["tshark", "lsof", "telnet", "socat", "wireshark", "xterm", "x11-xserver-utils"],
+      "repos": []
+    },
+    {
+      "id": "debug",
+      "name": "Debug Tools",
+      "description": "Cross-architecture debugging utilities",
+      "packages": ["gdb-multiarch", "xterm", "x11-xserver-utils"],
+      "repos": []
+    }
+  ]
+}
