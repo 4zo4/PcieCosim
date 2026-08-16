@@ -62,7 +62,7 @@ SEFLAGS = -DENABLE_SW_LOGS=$(ENABLE_SW_LOGS) -DLOG_LEVEL=$(LOG_LEVEL) -DENABLE_W
 NFLAGS = -Wno-WIDTHTRUNC -Wno-WIDTHEXPAND -Wno-CASEX -Wno-COMBDLY -Wno-UNOPTFLAT --no-timing -Wno-fatal
 DFLAGS = --converge-limit 2000 --x-assign unique --x-initial unique -DVL_DEBUG
 VFLAGS = $(strip -I$(OPEN_PCIE_EP_PATH) $(NFLAGS) $(HEFLAGS))
-OFLAGS = -g -O3 # -g -Og
+OFLAGS = -O3 # -g -O2
 CFLAGS = $(strip -fPIC -fcoroutines $(OEFLAGS) $(INC_FLAGS) $(SEFLAGS))
 LDFLAGS = -lrt -lpthread
 LDFLAGS += -L$(LIBVFIO_PATH)/build/lib -Wl,-rpath,$(LIBVFIO_PATH)/build/lib -lvfio-user
