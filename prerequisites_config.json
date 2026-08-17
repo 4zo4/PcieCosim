@@ -29,7 +29,8 @@
       "flex",
       "autoconf",
       "libjemalloc-dev",
-      "liblz4-dev"
+      "liblz4-dev",
+      "python3-pexpect"
     ],
     "repos": [
       { "path": "qemu/qemu", "id": "qemu", "type": "tools", "tag": "v11.1.0", "clone_depth": 1 },
@@ -60,7 +61,7 @@
       "id": "networking",
       "name": "PCIe Co-Simulation Networking",
       "description": "Packet inspection tools, socket utilities, and virtualization interface dependencies",
-      "packages": ["tshark", "lsof", "telnet", "socat", "wireshark", "xterm", "x11-xserver-utils"],
+      "packages": ["tshark", "lsof", "socat", "wireshark", "xterm", "x11-xserver-utils"],
       "repos": []
     },
     {
