@@ -33,7 +33,7 @@ The PCIe Cosim Bridge acts as a vfio-user server, facilitating communication bet
     +---------------------------------+
                     ^
                     |
-            vfio-user proto (UDS) 
+            vfio-user proto (UDS)
                     |
                     v
     +---------------------------------+
@@ -46,7 +46,7 @@ The PCIe Cosim Bridge acts as a vfio-user server, facilitating communication bet
     +---------------------------------+
                     ^^
                     ||
-            soft-TLP proto (UDS/TCP) 
+            soft-TLP proto (UDS/TCP)
                     ||
                     vV
     +---------------------------------+
@@ -60,49 +60,25 @@ The PCIe Cosim Bridge acts as a vfio-user server, facilitating communication bet
 
 ### 1. Prerequisites
 
- - **Build Tools**: `gcc`, `ninja`, `make`
  - **Python**: `python3`
+
+#### 1.1. Workspace setup
+
+Prior to initializing your environment, ensure Python 3 is installed on your host system:
 ```text
-    sudo apt install python3-pexpect
+    sudo apt update && sudo apt install -y python3
 ```
- - **Verilator**:
+Execute the interactive `workspace_setup.py` script from the root directory to initialize your workspace environment:
 ```text
-    git clone https://github.com/verilator/verilator.git
-    For install from git refer to Verilator User Guide at https://verilator.org/guide/latest/install.html
+    chmod +x /path/to/your/local/PcieCosim/workspace_setup.py
+    ../PcieCosim/workspace_setup.py
 ```
- - **QEMU**:
-```text
-    sudo apt install -y libjson-c-dev libpixman-1-dev libglib2.0-dev libslirp-dev
-    sudo apt purge qemu-system-x86
-    git clone https://github.com/qemu/qemu.git
-    cd qemu/
-    ./configure --target-list=x86_64-softmmu --enable-kvm --enable-debug --enable-slirp
-    make -j$(nproc)
-    cd build/
-    sudo ninja install
-```
- - **openPCIE**:
-```text
-    git clone https://github.com/chili-chips-ba/openPCIE.git
-    cd /path/to/your/local/PcieCosim/third_party/hw
-    ln -s /path/to/your/local/openPCIE openPCIE
-    Example:
-        ln -s /home/purple/soc/openPCIE openPCIE
-```
- - **libvfio-user**:
-```text
-    git clone https://github.com/nutanix/libvfio-user.git
-    cd /path/to/your/local/PcieCosim/third_party/lib
-    ln -s /path/to/your/local/libvfio-userlibv fio-user
-    Example:
-        ln -s /home/purple/tools/libvfio-user libvfio-user
-```
- - **linux kernel**:
-```text
-    git clone https://github.com/torvalds/linux.git
-    cd linux
-    git checkout v6.8
-```
+For a complete first-time environment installation, use the menu interface to select `Linux kernel source tree`, `PCIe Co-Simulation Networking` and `Debug Tools`:
+
+<img src="images/pcie_cosim_setup-workspace.png" alt="App Dashboard" width="75%">
+
+This installs QEMU, Verilator, openPCIE, and vfio-user lib sources, as weel as Linux kernel sources, vfio-user packet sniffer and GDB.
+
 ### 2. Get Linux Distribution
 
 To download Linux Distribution images do
@@ -141,18 +117,33 @@ The default co-simulation build options can be modified in `/path/to/your/local/
     LOG_LEVEL         = 40 (default), where SW Log Levels are: 0=NONE, 10=CRITICAL, 20=ERROR, 30=WARNING, 40=INFO, 50=DEBUG
     ENABLE_SW_LOGS    = 1  (default), where 0 disables SW logging
     ENABLE_HW_LOGS    = 1  (default), where 0 disables HW logging in RTL PCIe Endpoint blocks
-    ENABLE_PKT_LOGS   = 0  (default), where 1 enables internal Soft-TLP packet logging  
+    ENABLE_PKT_LOGS   = 0  (default), where 1 enables internal Soft-TLP packet logging
     ENABLE_WAIT_LIMIT = 1  (default), where 1 enables a timeout limit for PCIe Sim communication channel establishment
 ```
 
 ### 4. Run
 
-Execute the automation wrapper to start PCIe co-simulation with QEMU, bridge daemon, and RTL PCIe AXI RAM endpoint simulation:
+Execute the `run_pcie_agent.` automation script to start PCIe co-simulation with QEMU, bridge daemon, and RTL PCIe AXI RAM endpoint simulation:
+
 ```text
-    chmod +x /path/to/your/local/PcieCosim/run_pcie_agent.py
-    /path/to/your/local/PcieCosim/run_pcie_agent.py
+chmod +x /path/to/your/local/PcieCosim/run_pcie_agent.py
+./run_pcie_agent.py -h
+usage: run_pcie_agent.py [-h] [--distro {cirros,fedora,ubuntu}] [--sniffer] [--verbose] [--bridge]
+PCIe Co-Simulation Test Framework Agent
+options:
+  -h, --help            show this help message and exit
+  --distro {cirros,fedora,ubuntu}
+                        Specify the target guest OS distribution profile context to execute (default: cirros)
+  --sniffer             Launch packet sniffer to capture QEMU vfio-user traffic
+  --verbose             Enable verbose for the PCIe Co-Simulation Bridge execution
+  --bridge              Launch standalone PCIe Co-Simulation Bridge without QEMU guest OS
 ```
-This runs co-simulation with CirrOS Linux distribution.
+
+To run co-simulation with CirrOS Linux distribution do:
+```text
+    ./run_pcie_agent.py
+```
+
 To run co-simulation with Fedora or Ubuntu distribution do
 ```text
     /path/to/your/local/PcieCosim/run_pcie_agent.py --distro fedora|ubuntu
@@ -163,8 +154,6 @@ You can configure the following variables in `run_pcie_agent.py`:
 
 - `enableAutomatedTest`: Enables or disables the automated verification test suite (True/False).
 - `testMatrix`: Selects the specific test cases to execute (default: `[1, 2, 3, 4]`).
-- `enableVerbose`: Enables or disables verbose formatting for internal `libvfio-user` logs (True/False).
-- `enableSniffer`: Enables or disables the eBPF-based VFIO-User packet sniffer (True/False).
 
 ### 5. Other
 
@@ -182,23 +171,7 @@ You can see the simulation traces by running `make wave` or `gtkwave sim_wavefor
 
 #### 5.1.2 Wireshark Packet Sniffer
 
-To visualize vfio-user message exchange install Wireshark and configure a packet sniffer to capture VFIO-User traffic over the UNIX Domain Socket (UDS) channel between QEMU and the PCIe Co-simulation Bridge:
-```text
-    sudo apt install -y wireshark
-    sudo setcap 'CAP_NET_RAW+eip CAP_NET_ADMIN+eip' /usr/bin/dumpcap
-    sudo chmod +x /usr/bin/dumpcap
-    newgrp wireshark
-```
-The `run_pcie_agent.py` automation script uses the `sockdump.py` to capture VFIO-User traffic. The `sockdump.py` script depends on the Extended Berkeley Packet Filter (eBPF) packages installed:
-```text
-    sudo apt install python3-bpfcc bpfcc-tools
-```
-The Wireshark dissector for the VFIO-User protocol is named `vfio_user.lua`. To install it, copy the dissector file to your local Wireshark plugins directory:
-```text
-    mkdir -p ~/.config/wireshark/plugins
-    cp /path/to/your/local/PcieCosim/tools/net/vfio_user.lua ~/.config/wireshark/plugins/vfio_user.lua
-```
-Next, configure the sudoers file to grant the necessary permissions for executing the packet capture tool without password prompts:
+Configure the sudoers file to grant the necessary permissions for executing the packet capture tool without password prompts:
 ```text
     Example configuration via '$ sudo visudo':
 
@@ -214,7 +187,8 @@ Next, configure the sudoers file to grant the necessary permissions for executin
     @includedir /etc/sudoers.d
     ...
 ```
-If you enable the packet sniffer in `run_pcie_agent.py` by setting `enableSniffer = True`, a `vfio-user.pcap` file will be generated in `/path/to/your/local/PcieCosim/logs`.
+
+A `vfio-user.pcap` file will be generated in `/path/to/your/local/PcieCosim/logs`.
 
 <img src="images/wireshark_vfio_user_capture.png" alt="App Dashboard" width="50%">
 <img src="images/wireshark_vfio_user_irq_set_req_capture.png" alt="App Dashboard" width="50%">
