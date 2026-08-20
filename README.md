@@ -26,34 +26,34 @@ PCIe co-simulation framework using Verilator and QEMU vfio-user-pci with openPCI
 The PCIe Cosim Bridge acts as a vfio-user server, facilitating communication between the QEMU and the PCIe Endpoint Simulation. When the PCIe Bridge receives a vfio-user message from QEMU it forwards the PCIe packets to the PCIe Simulation, which completes the PCIe transaction. For no-posted operations like MRd, the PCIe Simulation sends an ACK along with the requested data back to the PCIe Bridge, which then forwards the data to QEMU.
 
 ```text
-    +---------------------------------+
-    |                                 |
-    | (QEMU vfio-user-pci) + Linux OS |
-    |                                 |
-    +---------------------------------+
-                    ^
-                    |
-            vfio-user proto (UDS)
-                    |
-                    v
-    +---------------------------------+
-    |         libvfio-user            |
-    |       (vfio-user Server)        |
-    |                                 |
-    |       PCIe Cosim Bridge         |
-    |                                 |
-    |       (UDS/TCP Client)          |
-    +---------------------------------+
-                    ^^
-                    ||
-            soft-TLP proto (UDS/TCP)
-                    ||
-                    vV
-    +---------------------------------+
-    |       (UDS/TCP Server)          |
-    |                                 |
-    |   Verilated PCIe Sim Endpoint   |
-    +---------------------------------+
+            +---------------------------------+
+            |                                 |
+            | (QEMU vfio-user-pci) + Linux OS |
+            |                                 |
+            +---------------------------------+
+                            ^
+                            |
+                    vfio-user proto (UDS)
+                            |
+                            v
+            +---------------------------------+
+            |         libvfio-user            |
+            |       (vfio-user Server)        |
+            |                                 |
+            |       PCIe Cosim Bridge         |
+            |                                 |
+            |       (UDS/TCP Client)          |
+            +---------------------------------+
+                            ^^
+                            ||
+                    soft-TLP proto (UDS/TCP)
+                            ||
+                            vV
+            +---------------------------------+
+            |       (UDS/TCP Server)          |
+            |                                 |
+            |   Verilated PCIe Sim Endpoint   |
+            +---------------------------------+
 ```
 
 ## Quick Start
@@ -123,7 +123,7 @@ The default co-simulation build options can be modified in `/path/to/your/local/
 
 ### 4. Run
 
-Execute the `run_pcie_agent.` automation script to start PCIe co-simulation with QEMU, bridge daemon, and RTL PCIe AXI RAM endpoint simulation:
+Execute the `run_pcie_agent.py` script to start PCIe co-simulation with QEMU, bridge daemon, and RTL PCIe AXI RAM endpoint simulation:
 
 ```text
 chmod +x /path/to/your/local/PcieCosim/run_pcie_agent.py
@@ -157,9 +157,15 @@ You can configure the following variables in `run_pcie_agent.py`:
 
 ### 5. Other
 
-### 5.1 Optional
+### 5.1. Uninstall, purge, or remove component
 
-#### 5.1.1 GTKWave
+Use the `workspace_setup.py` script to uninstall, purge, or remove project-specific components:
+
+<img src="images/pcie_cosim_workspace_setup_help.png" alt="App Dashboard" width="75%">
+
+### 5.2 Optional
+
+#### 5.2.1 GTKWave
 
 To visualize PCIe Simulation RTL signalling install GTKWave:
 ```text
@@ -169,7 +175,7 @@ You can see the simulation traces by running `make wave` or `gtkwave sim_wavefor
 
 <img src="images/gtkwave-sim-waveform-trace.png" alt="App Dashboard" width="75%">
 
-#### 5.1.2 Wireshark Packet Sniffer
+#### 5.2.2 Wireshark Packet Sniffer
 
 Configure the sudoers file to grant the necessary permissions for executing the packet capture tool without password prompts:
 ```text
