@@ -26,34 +26,34 @@ PCIe co-simulation framework using Verilator and QEMU vfio-user-pci with openPCI
 The PCIe Cosim Bridge acts as a vfio-user server, facilitating communication between the QEMU and the PCIe Endpoint Simulation. When the PCIe Bridge receives a vfio-user message from QEMU it forwards the PCIe packets to the PCIe Simulation, which completes the PCIe transaction. For no-posted operations like MRd, the PCIe Simulation sends an ACK along with the requested data back to the PCIe Bridge, which then forwards the data to QEMU.
 
 ```text
-            +---------------------------------+
-            |                                 |
-            | (QEMU vfio-user-pci) + Linux OS |
-            |                                 |
-            +---------------------------------+
-                            ^
-                            |
-                    vfio-user proto (UDS)
-                            |
-                            v
-            +---------------------------------+
-            |         libvfio-user            |
-            |       (vfio-user Server)        |
-            |                                 |
-            |       PCIe Cosim Bridge         |
-            |                                 |
-            |       (UDS/TCP Client)          |
-            +---------------------------------+
-                            ^^
-                            ||
-                    soft-TLP proto (UDS/TCP)
-                            ||
-                            vV
-            +---------------------------------+
-            |       (UDS/TCP Server)          |
-            |                                 |
-            |   Verilated PCIe Sim Endpoint   |
-            +---------------------------------+
+                +---------------------------------+
+                |                                 |
+                | (QEMU vfio-user-pci) + Linux OS |
+                |                                 |
+                +---------------------------------+
+                                ^
+                                |
+                        vfio-user proto (UDS)
+                                |
+                                v
+                +---------------------------------+
+                |         libvfio-user            |
+                |       (vfio-user Server)        |
+                |                                 |
+                |       PCIe Cosim Bridge         |
+                |                                 |
+                |       (UDS/TCP Client)          |
+                +---------------------------------+
+                                ^^
+                                ||
+                        soft-TLP proto (UDS/TCP)
+                                ||
+                                vV
+                +---------------------------------+
+                |       (UDS/TCP Server)          |
+                |                                 |
+                |   Verilated PCIe Sim Endpoint   |
+                +---------------------------------+
 ```
 
 ## Quick Start
@@ -97,11 +97,26 @@ To download Fedora or Ubuntu distribution do
 To build Linux kernel image with PCIe Co-Simulation configuration changes do
 ```text
     chmod +x /path/to/your/local/PcieCosim/build_vmlinuz.v6.8_pcie_cosim.sh
+    ./build_vmlinuz.v6.8_pcie_cosim.sh help
+    Usage: build_vmlinuz.v6.8_pcie_cosim.sh [OPTIONS]
+
+    Options:
+    clean    Perform a full 'make clean' before compiling (Optional)
+    debug    Enable Linux kernel debugging configs and deploy vmlinux symbols
+    help, -h Display this help menu
+
+    Environment Variables:
+    LINUX_TOP_DIR Path to Linux source tree
+                    Current value: /home/purple/projects/pcie_cosim/third_party/os/linux
+    Example:
+    LINUX_TOP_DIR=/path/to/linux build_vmlinuz.v6.8_pcie_cosim.sh clean
+```
+```text
     /path/to/your/local/PcieCosim/build_vmlinuz.v6.8_pcie_cosim.sh
 ```
 this generates the customized target kernel and copies the image asset into `/path/to/your/local/PcieCosim/third_party/os/images/linux`
 
-To build PCIe co-simulation do
+To build PCIe co-simulation do (Optional)
 ```text
     /path/to/your/local/PcieCosim/make
         or
@@ -109,7 +124,7 @@ To build PCIe co-simulation do
 ```
 this outputs target executable to `/path/to/your/local/PcieCosim/build/pcie_sim`
 
-#### 3.1 PCIe Co-simulation Build Configuration settings
+#### 3.1 PCIe Co-simulation Build Configuration settings (Optional)
 
 The default co-simulation build options can be modified in `/path/to/your/local/PcieCosim/Makefile`:
 
@@ -128,14 +143,15 @@ Execute the `run_pcie_agent.py` script to start PCIe co-simulation with QEMU, br
 ```text
 chmod +x /path/to/your/local/PcieCosim/run_pcie_agent.py
 ./run_pcie_agent.py -h
-usage: run_pcie_agent.py [-h] [--distro {cirros,fedora,ubuntu}] [--sniffer] [--verbose] [--bridge]
+usage: run_pcie_agent.py [-h] [--distro {cirros,fedora,ubuntu}] [--verbose] [--debug] [--sniffer] [--bridge]
 PCIe Co-Simulation Test Framework Agent
 options:
   -h, --help            show this help message and exit
   --distro {cirros,fedora,ubuntu}
                         Specify the target guest OS distribution profile context to execute (default: cirros)
-  --sniffer             Launch packet sniffer to capture QEMU vfio-user traffic
   --verbose             Enable verbose for the PCIe Co-Simulation Bridge execution
+  --debug               Enable GDB server and stop guest CPU at startup
+  --sniffer             Launch packet sniffer to capture QEMU vfio-user traffic
   --bridge              Launch standalone PCIe Co-Simulation Bridge without QEMU guest OS
 ```
 
