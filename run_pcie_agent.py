@@ -13,6 +13,7 @@
 import argparse
 from asyncio import subprocess
 import getpass
+import json
 import os
 import subprocess
 import shutil
@@ -23,6 +24,18 @@ import time
 import traceback
 import pexpect
 import re
+
+def load_json(path):
+    if not os.path.exists(path):
+        return None
+
+    with open(path, "r") as f:
+        try:
+            return json.load(f)
+        except json.JSONDecodeError as e:
+            print(f"[⚠️] Error: Failed to parse '{path}'")
+            print(f"[⚠️] {path}:{e.lineno}:{e.colno}: {e.msg}")
+            sys.exit(1)
 
 def resolve_relative_paths():
     """Calculate the absolute root directory of the project file"""
@@ -135,7 +148,7 @@ def stop_vfio_user_pkt_sniffer(sniffer_proc):
             sniffer_proc.wait(timeout=1)
 
     except Exception as ex:
-        print(f"\n\033[91m[Agent] FATAL: Exception thrown during sniffer teardown: {ex}\033[0m")
+        print(f"\033[91m[Agent] FATAL: Exception thrown during sniffer teardown: {ex}\033[0m")
         traceback.print_exc()
     finally:
         if hasattr(sniffer_proc, 'slog_fd') and sniffer_proc.slog_fd:
@@ -203,7 +216,7 @@ def detect_and_initialize_guest_os_profile(args, qemu):
         print("[Agent] Profile Identified: Ubuntu Noble Core Environment")
         manual = False # set True for manual login
         if manual:
-            print("[Agent] Type credentials manually. Press Ctrl+] to exit when done.\n")
+            print("[Agent] Type credentials manually. Press Ctrl+] to exit when done.")
             qemu.logfile_read = None
             time.sleep(0.1)
             qemu.interact(escape_character='\x1d')
@@ -231,7 +244,7 @@ def detect_and_initialize_guest_os_profile(args, qemu):
         print("[Agent] Elevating user session permissions to Supervisor root status...")
         qemu.sendline(b"sudo -i")
         qemu.expect(ubuntu_profile["prompt"], timeout=15)
-        print("\n\033[94m[Agent] Established Ubuntu Root framework\033[0m")
+        print("\033[94m[Agent] Established Ubuntu Root framework\033[0m")
 
         return ubuntu_profile
 
@@ -263,13 +276,13 @@ def detect_and_initialize_guest_os_profile(args, qemu):
             print("[Agent] Elevating user session permissions to Supervisor root...")
             qemu.sendline(b"sudo -i")
             qemu.expect(r"#\s*$", timeout=5)
-            print(f"\n\033[94m[Agent] Established CirrOS Root framework\033[0m")
+            print(f"\033[94m[Agent] Established CirrOS Root framework\033[0m")
 
         elif index == 2:
             print("[Agent] Elevating pre-authenticated user session permissions to Supervisor root...")
             qemu.sendline(b"sudo -i")
             qemu.expect(r"#\s*$", timeout=5)
-            print(f"\n\033[94m[Agent] Established CirrOS Root framework\033[0m")
+            print(f"\033[94m[Agent] Established CirrOS Root framework\033[0m")
 
         return cirros_profile
 
@@ -294,7 +307,7 @@ def detect_and_initialize_guest_os_profile(args, qemu):
         qemu.sendline(fedora_profile["password"].encode())
 
         qemu.expect(fedora_profile["prompt"], timeout=15)
-        print(f"\n\033[94m[Agent] Established Fedora Root framework\033[0m")
+        print(f"\033[94m[Agent] Established Fedora Root framework\033[0m")
 
         return fedora_profile
     # Fallback
@@ -471,7 +484,23 @@ def run_test_4_irq_verification(qemu, profile, log_file_path):
         return False
 
 def main():
-    print("\033[94m[Agent] Resolving workspace infrastructure layout...\033[0m")
+    if os.path.exists("/tmp/vfio-pcie.sock"):
+        print("\033[33m[Agent] Warning: PCI-Bridge already run.\033[0m", flush=True)
+
+    agent_id = os.getpid()
+    config_state = load_json(".configs.json")
+    config_meta = None
+
+    if config_state:
+        config_meta = config_state.get("meta", {})
+        config_repos = config_meta.get("repos", []) + config_meta.get("selected_repos", [])
+        config_scopes = config_meta.get("selected_scopes", [])
+    else:
+        print("\033[91m[Agent] Fatal: Workspace not initialized. Please run 'workspace_setup.py' to setup workspace.\033[0m")
+        sys.exit(1)
+
+    enable_net = "networking" in config_scopes
+    enable_dbg = "debug" in config_scopes
 
     parser = argparse.ArgumentParser(description="PCIe Co-Simulation Test Framework Agent")
     parser.add_argument(
@@ -481,18 +510,26 @@ def main():
         help="Specify the target guest OS distribution profile context to execute (default: cirros)"
     )
     parser.add_argument(
-        "--sniffer", action="store_true",
-        help="Launch packet sniffer to capture QEMU vfio-user traffic"
-    )
-    parser.add_argument(
         "--verbose", action="store_true",
         help="Enable verbose for the PCIe Co-Simulation Bridge execution"
     )
+    if enable_dbg:
+        parser.add_argument(
+            "--debug", action="store_true",
+            help="Enable GDB server and stop guest CPU at startup"
+        )
+    if enable_net:
+        parser.add_argument(
+            "--sniffer", action="store_true",
+            help="Launch packet sniffer to capture QEMU vfio-user traffic"
+        )
     parser.add_argument(
         "--bridge", action="store_true",
         help="Launch standalone PCIe Co-Simulation Bridge without QEMU guest OS"
     )
     args = parser.parse_args()
+
+    print("\033[94m[Agent] Resolving workspace infrastructure layout...\033[0m")
 
     project_root, log_dir, log_file_path, pcap_file_path, slog_file_path, image_root = resolve_relative_paths()
     setup_log_directory(log_dir, log_file_path, pcap_file_path, slog_file_path, max_backups=2)
@@ -500,16 +537,17 @@ def main():
 
     image_root = os.path.join(project_root, "third_party", "os", "images", "linux")
     base_cmd = (
-        f"qemu-system-x86_64 -enable-kvm -cpu qemu64,+kvm_pv_unhalt -m 1024M -machine pc -net none "
+        f"-enable-kvm -cpu qemu64,+kvm_pv_unhalt -m 1024M -machine pc -net none "
         f"-nographic -vga none"
     )
     external_kernel = os.path.join(image_root, "vmlinuz.v6.8_pcie_cosim")
+    external_debug_kernel = os.path.join(image_root, "vmlinux.v6.8_pcie_cosim")
 
     if args.distro == "cirros":
         disk_img = os.path.join(image_root, "disk.cirros")
         boot_kernel = external_kernel if os.path.exists(external_kernel) else os.path.join(image_root, "vmlinuz.cirros")
         boot_initrd = os.path.join(image_root, "initrd.cirros")
-        base_cmd = f"qemu-system-x86_64 -enable-kvm -cpu host -m 512M -machine q35 -net none -nographic"
+        base_cmd = f"-enable-kvm -cpu host -m 512M -machine q35 -net none -nographic"
         append_args = (
             f"-kernel {boot_kernel} "
             f"-initrd {boot_initrd} "
@@ -529,7 +567,7 @@ def main():
     elif args.distro == "ubuntu":
         disk_img = os.path.join(image_root, "disk.ubuntu")
         boot_kernel = external_kernel if os.path.exists(external_kernel) else os.path.join(image_root, "vmlinuz.ubuntu")
-        base_cmd = f"qemu-system-x86_64 -enable-kvm -cpu qemu64,+kvm_pv_unhalt -m 1024M -machine pc -net none -nographic -vga none"
+        base_cmd = f"-enable-kvm -cpu qemu64,+kvm_pv_unhalt -m 1024M -machine pc -net none -nographic -vga none"
         append_args = (
             f"-kernel {boot_kernel} "
             f"-drive file={disk_img},format=qcow2,if=virtio "
@@ -537,17 +575,25 @@ def main():
         )
     if args.distro != "ubuntu":
         if not os.path.exists(disk_img):
-            print(f"\n\033[91m[Agent] FATAL: Specified target disk image file asset missing: {disk_img}\033[0m")
+            print(f"\033[91m[Agent] FATAL: Specified target disk image file asset missing: {disk_img}\033[0m")
             print("Please run your asset management or symlink tools first.")
             sys.exit(1)
 
     # Consolidated Execution Assignment
-    qemu_cmd = (
+    qemu_args = [
         f"{base_cmd} "
         f"{append_args} "
         f"-device pcie-root-port,id=pcie.1 "
         f"-device '{{\"driver\": \"vfio-user-pci\", \"socket\": {{\"type\": \"unix\", \"path\": \"/tmp/vfio-pcie.sock\"}}, \"bus\": \"pcie.1\", \"id\": \"pcie_cosim\"}}'"
-    )
+    ]
+
+    gdb_sock = None
+    gdb_proc = None
+    if enable_dbg and args.debug:
+        gdb_sock = f"/tmp/gdb_{agent_id}.sock"
+        qemu_args.extend(["-gdb", f"unix:{gdb_sock},server=on,wait=off", "-S"])
+
+    qemu_cmd = "qemu-system-x86_64 " + " ".join(qemu_args)
 
     # Launch the PCIe simulation
     bridge_flags = []
@@ -557,6 +603,13 @@ def main():
         bridge_flags.append("r")
     bridge_opt = f"-{''.join(bridge_flags)}" if bridge_flags else ""
     bridge_bin = os.path.join(project_root, "build", "pcie_sim")
+    if not os.path.exists(bridge_bin):
+        print(f"[Agent] PCI-Bridge image not found. Compiling {bridge_bin}...")
+        try:
+            subprocess.run(["make"], cwd=project_root, check=True)
+        except subprocess.CalledProcessError as e:
+            print(f"[🗙 Error] Compilation failed for {bridge_bin}: {e}")
+            return
     bridge = pexpect.spawn(f"stdbuf -oL {bridge_bin} {bridge_opt}")
 
     # Launch background continuous line processor
@@ -589,7 +642,7 @@ def main():
         time.sleep(0.5)
 
     except pexpect.TIMEOUT as e:
-        print(f"\n\033[91m[Agent] FATAL: PCIe-Bridge Backend Handshake Fail: {e}\033[0m")
+        print(f"\033[91m[Agent] FATAL: PCIe-Bridge Backend Handshake Fail: {e}\033[0m")
         bridge.terminate(force=True)
         backend_log.close()
         return
@@ -605,7 +658,7 @@ def main():
                 bridge.expect(pexpect.EOF, timeout=2)
                 print("[Agent] PCIe-Bridge reaped gracefully.")
         except pexpect.TIMEOUT:
-            print("\n[Agent] WARNING: PCIe-Bridge is frozen! Forcing kill...")
+            print("[Agent] WARNING: PCIe-Bridge is frozen! Forcing kill...")
             bridge.terminate(force=True)
             for sock in ["/tmp/vfio-pcie.sock", "/tmp/pcie-cosim1.sock", "/tmp/pcie-cosim2.sock"]:
                 if os.path.exists(sock):
@@ -620,7 +673,7 @@ def main():
 
     # Launch the packet sniffer to capture VFIO-User traffic over UDS on the channel with QEMU
     sniffer_proc = None
-    if args.sniffer:
+    if enable_net and args.sniffer:
         print(f"[Agent] Launching VFIO-User packet sniffer...")
         sniffer_proc = start_vfio_user_pkt_sniffer(project_root, pcap_file_path, slog_file_path)
 
@@ -628,11 +681,30 @@ def main():
     qemu = pexpect.spawn(qemu_cmd)
     qemu.logfile_read = sys.stdout.buffer
 
+    if enable_dbg and args.debug and os.path.exists(external_debug_kernel):
+        print("\033[92m[Agent] Spawning Terminal for Debugging (gdb)...\033[0m")
+
+        arch = "i386:x86-64"
+        current_env = os.environ.copy()
+        gdb_commands = (
+            f"set architecture {arch}\n"
+            f"target remote {gdb_sock}\n"
+        )
+        gdb_script_path = os.path.join(project_root, "build", f".gdb_init_agent_{agent_id}")
+        with open(gdb_script_path, "w") as f:
+            f.write(gdb_commands)
+        gdb_cmd = [
+            "xterm", "-hold", "-title", f"Agent {agent_id} GDB Target {arch}",
+            "-e", "gdb-multiarch", external_debug_kernel, "-x", str(gdb_script_path)
+        ]
+        gdb_proc = subprocess.Popen(gdb_cmd, env=current_env)
+        print(f"\033[95m[Agent] Debug mode active. GDB stub listening on UDS '{gdb_sock}'. CPU frozen at entry point.\033[0m")
+
     try:
         env_profile = detect_and_initialize_guest_os_profile(args, qemu)
 
         if env_profile.get("is_boot_failure", False):
-            print(f"\n\033[93m[Agent] HALT: Automation aborted on a crashed OS.\033[0m")
+            print(f"\033[93m[Agent] HALT: Automation aborted on a crashed OS.\033[0m")
             print(f"\033[93m[Agent] HALT: Transferring control to terminal console for troubleshooting.")
             print("[Agent] HALT: Press Enter to access maintenance mode. Press Ctrl+] to exit agent.\n")
 
@@ -661,12 +733,12 @@ def main():
                 testResults.append(run_test_4_irq_verification(qemu, env_profile, log_file_path))
 
             if all(testResults):
-                print(f"\n\033[93m[Agent] RUN RESULT: AUTOMATED VERIFICATION: PASS\033[0m")
+                print(f"\033[93m[Agent] RUN RESULT: AUTOMATED VERIFICATION: PASS\033[0m")
             else:
                 failedTests = [test for test, result in zip(testMatrix, testResults) if not result]
-                print(f"\n\033[91m[Agent] RUN RESULT: AUTOMATED VERIFICATION: FAIL: {failedTests}\033[0m")
+                print(f"\033[91m[Agent] RUN RESULT: AUTOMATED VERIFICATION: FAIL: {failedTests}\033[0m")
         else:
-            print(f"\n\033[35m[Agent] Automated verification BYPASSED.\033[0m")
+            print(f"\033[35m[Agent] Automated verification BYPASSED.\033[0m")
 
         print("\n\033[95m[Agent] Entering interactive mode. Press Ctrl+] to exit.\033[0m")
 
@@ -675,14 +747,15 @@ def main():
         qemu.interact(escape_character='\x1d')
 
     except pexpect.TIMEOUT as te:
-        print(f"\n\033[91m[Agent] FATAL: Pexpect Watchdog Timeout Expired: {te}\033[0m")
+        print(f"\033[91m[Agent] FATAL: Pexpect Watchdog Timeout Expired: {te}\033[0m")
         traceback.print_exc()
     except Exception as ex:
-        print(f"\n\033[91m[Agent] FATAL: Exception thrown: {ex}\033[0m")
+        print(f"\033[91m[Agent] FATAL: Exception thrown: {ex}\033[0m")
         traceback.print_exc()
     finally:
-        print(f"\n\033[96m[Agent] Tearing down infrastructure...\033[0m")
-        stop_vfio_user_pkt_sniffer(sniffer_proc)
+        print(f"\033[96m[Agent] Tearing down infrastructure...\033[0m")
+        if sniffer_proc:
+            stop_vfio_user_pkt_sniffer(sniffer_proc)
         try:
             qemu.terminate(force=True)
             print("[Agent] QEMU stopped.")
@@ -695,7 +768,7 @@ def main():
                 bridge.expect(pexpect.EOF, timeout=2)
                 print("[Agent] PCIe-Bridge reaped gracefully.")
         except pexpect.TIMEOUT:
-            print("\n[Agent] WARNING: PCIe-Bridge is frozen! Forcing kill...")
+            print("[Agent] WARNING: PCIe-Bridge is frozen! Forcing kill...")
             bridge.terminate(force=True)
             for sock in ["/tmp/vfio-pcie.sock", "/tmp/pcie-cosim1.sock", "/tmp/pcie-cosim2.sock"]:
                 if os.path.exists(sock):
@@ -703,7 +776,27 @@ def main():
                     except Exception: pass
         except pexpect.EOF:
             print("[Agent] PCIe-Bridge closed channel.")
-
+        if gdb_proc:
+            if gdb_proc.poll() is None:
+                try:
+                    gdb_proc.terminate()
+                    gdb_proc.wait(timeout=1.0)
+                    print(f"[Agent] Terminated GDB.")
+                except subprocess.TimeoutExpired:
+                    try:
+                        gdb_proc.kill()
+                        gdb_proc.wait()
+                        print(f"[Agent] Force killed GDB (Timeout expired).")
+                    except Exception:
+                        pass
+                except Exception:
+                    try:
+                        gdb_proc.kill()
+                    except Exception:
+                        pass
+            if os.path.exists(gdb_sock):
+                try: os.unlink(gdb_sock)
+                except Exception: pass
         backend_log.close()
         print("[Agent] Teardown complete.")
 

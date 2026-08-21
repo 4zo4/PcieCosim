@@ -9,6 +9,7 @@ show_usage() {
     echo ""
     echo "Options:"
     echo "  clean    Perform a full 'make clean' before compiling (Optional)"
+    echo "  debug    Enable Linux kernel debugging configs and deploy vmlinux symbols"
     echo "  help, -h Display this help menu"
     echo ""
     echo "Environment Variables:"
@@ -20,10 +21,16 @@ show_usage() {
 }
 
 DO_CLEAN=false
-if [[ $# -gt 0 ]]; then
+ENABLE_DEBUG=false
+while [[ $# -gt 0 ]]; do
     case "$1" in
         clean)
             DO_CLEAN=true
+            shift
+            ;;
+        debug)
+            ENABLE_DEBUG=true
+            shift
             ;;
         help|-h|--help)
             show_usage
@@ -33,7 +40,7 @@ if [[ $# -gt 0 ]]; then
             show_usage
             ;;
     esac
-fi
+done
 
 if [ ! -d "${LINUX_TOP_DIR}" ]; then
     echo -e "\033[91m[Build] FATAL ERROR: Path does not exist: LINUX_TOP_DIR=${LINUX_TOP_DIR}\033[0m"
@@ -77,6 +84,14 @@ echo "[Build] Injecting custom PCIe Co-Simulation configuration changes..."
                  --disable CONFIG_FB \
                  --disable CONFIG_BLK_DEV_DM
 
+if [ "$ENABLE_DEBUG" = true ]; then
+    echo "[Build] Injecting additional GDB kernel debug flags..."
+    ./scripts/config --enable CONFIG_DEBUG_KERNEL \
+                     --enable CONFIG_DEBUG_INFO \
+                     --enable CONFIG_DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT \
+                     --disable CONFIG_RANDOMIZE_BASE
+fi
+
 echo "[Build] Synchronizing dependency tables (make olddefconfig)..."
 make olddefconfig
 
@@ -87,3 +102,8 @@ TARGET_DIR="${SCRIPT_DIR}/third_party/os/images/linux"
 
 echo "[Build] Deploying bzImage to pcie_cosim asset tree..."
 cp arch/x86/boot/bzImage "${TARGET_DIR}/vmlinuz.v6.8_pcie_cosim"
+
+if [ "$ENABLE_DEBUG" = true ]; then
+    echo "[Build] Deploying uncompressed vmlinux symbols for GDB..."
+    cp vmlinux "${TARGET_DIR}/vmlinux.v6.8_pcie_cosim"
+fi
