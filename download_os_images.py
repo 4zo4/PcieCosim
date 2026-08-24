@@ -8,7 +8,7 @@ import urllib.request
 # Default configuration option
 SELECT = "cirros"
 
-CIRROS_BASE_URL = "https://cirros-cloud.net/"
+CIRROS_BASE_URL = "https://download.cirros-cloud.net/0.6.2/"
 
 UBUNTU_BASE_URL = "https://cloud-images.ubuntu.com/minimal/releases/noble/release/"
 UBUNTU_DISK_URL = UBUNTU_BASE_URL

@@ -1,0 +1,13 @@
+! Colors
+XTerm*background: black
+XTerm*foreground: white
+
+! Font settings
+XTerm*faceName: Monospace
+XTerm*faceSize: 14
+
+! Copy on selection and Paste shortcut
+XTerm*selectToClipboard: true
+XTerm*VT100.Translations: #override \
+    Ctrl <Key>V: insert-selection(CLIPBOARD)
+XTerm*geometry: 120x40

@@ -34,11 +34,11 @@ def print_workspace_manifest(blueprint):
     if repos:
         print("[📦 Mandatory Repositories]:")
         for repo in repos:
-            dir = repo.get("dir") or repo["path"].split("/")[-1]
+            dir = repo.get("dir") or repo["slug"].split("/")[-1]
             version_info = f" version: {repo['tag']}" if repo.get("tag") else ""
             branch_info = f" branch: {repo['branch']}" if repo.get("branch") else ""
             repo_info = format_repo_info(repo)
-            print(f"  • {dir} -> {repo['path']}{repo_info}")
+            print(f"  • {dir} -> {repo['slug']}{repo_info}")
 
     scopes = blueprint.get("scopes", [])
     if scopes:
@@ -48,7 +48,11 @@ def print_workspace_manifest(blueprint):
             if scope.get("packages"):
                 print(f"    Packages: {', '.join(scope['packages'])}")
             if scope.get("repos"):
-                scope_repos = [r["dir"] if r.get("dir") else r["path"].split("/")[-1] for r in scope["repos"]]
+                scope_repos = []
+                for repo in scope["repos"]:
+                    repo_dir = repo["dir"] if repo.get("dir") else repo["slug"].split("/")[-1]
+                    repo_info = format_repo_info(repo)
+                    scope_repos.append(f"{repo_dir}{repo_info}")
                 print(f"    Repos: {', '.join(scope_repos)}")
 
 def install_system_packages(package_list):
@@ -63,13 +67,19 @@ def install_system_packages(package_list):
         subprocess.run(["sudo", "-E", "apt", "install", "-y"] + package_list, env=env, check=True)
         return True
     except subprocess.CalledProcessError as e:
-        print(f"[⚠️] Native package manager reported a failure: {e}")
+        print(f"[⚠️] Package manager reported a failure: {e}")
         return False
 
 try:
     from InquirerPy import inquirer
     from InquirerPy.base.control import Choice
 except ModuleNotFoundError:
+    try:
+        import importlib.metadata
+        importlib.metadata.version("InquirerPy")
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+    except importlib.metadata.PackageNotFoundError:
+        pass
 
     if install_system_packages(["python3-inquirerpy"]):
         print("[✓ Success] python3-inquirerpy installed.\n")
@@ -339,6 +349,140 @@ def check_upstream_update(repo_path, tag):
     except Exception:
         pass
 
+def configure_kernel_headers_for_vfio_user_pkt_sniffer():
+    """Setup BPF kernel headers for multiple distributions."""
+
+    kernel_release = subprocess.check_output(["uname", "-r"]).decode().strip()
+    build_path = f"/lib/modules/{kernel_release}/build"
+
+    if os.path.exists(os.path.join(build_path, "include")):
+        return True
+
+    # Microsoft WSL2
+    if "microsoft" in kernel_release.lower():
+        subprocess.run(["sudo", "mkdir", "-p", f"/lib/modules/{kernel_release}"], check=True)
+        possible_siblings = ["debian", "Ubuntu", "ubuntu"]
+        for distro in possible_siblings:
+            sibling_source = f"/wsl.localhost/{distro}/lib/modules/{kernel_release}/build"
+            if os.path.exists(os.path.join(sibling_source, "include")):
+                subprocess.run(["sudo", "ln", "-sfn", sibling_source, build_path], check=True)
+                print("[!] Established cross-distribution link to kernel headers for kernel release: {kernel_release}")
+                return True
+
+        kheaders_archive = "/sys/kernel/kheaders.tar.xz"
+        if os.path.exists(kheaders_archive):
+            subprocess.run(["sudo", "tar", "-xf", kheaders_archive, "-C", build_path], check=True)
+            print("[!] Kernel headers extracted at {build_path} from archive")
+            return True
+
+        print("[Agent] Reconstructing WSL2 upstream kernel headers from upstream repository archives...")
+        subprocess.run(["sudo", "apt-get", "update"], check=True)
+        subprocess.run(["sudo", "apt-get", "install", "-y", "flex", "bison", "libelf-dev", "libssl-dev", "bc"], check=True)
+
+        version_digits = re.findall(r'\d+', kernel_release)
+        major_minor = f"{version_digits[0]}.{version_digits[1]}" if len(version_digits) >= 2 else "6.6"
+
+        branch = f"linux-msft-wsl-{major_minor}.y"
+        scratch_dir = f"/var/tmp/wsl2_kernel_src_{major_minor}"
+        url = "https://github.com/microsoft/WSL2-Linux-Kernel/"
+
+        if not os.path.exists(scratch_dir):
+            subprocess.run(["git", "clone", "--depth=1", "-b", branch, url, scratch_dir], check=True)
+        else:
+            subprocess.run(["make", "mrproper"], cwd=scratch_dir, check=True)
+
+        subprocess.run(["make", "defconfig"], cwd=scratch_dir, check=True)
+        with open(os.path.join(scratch_dir, ".config"), "a") as f:
+            f.write("\nCONFIG_BPF=y\n")
+            f.write("CONFIG_BPF_SYSCALL=y\n")
+            f.write("CONFIG_BPF_JIT=y\n")
+            f.write("CONFIG_BPF_EVENTS=y\n")
+            f.write("CONFIG_BPF_EVENTS=y\n")
+            f.write("CONFIG_KPROBES=y\n")
+            f.write("CONFIG_HAVE_KPROBES=y\n")
+            f.write("CONFIG_NET_CLS_ACT=y\n")
+            f.write("CONFIG_NET_ACT_BPF=y\n")
+
+        subprocess.run(["make", "olddefconfig"], cwd=scratch_dir, check=True)
+        subprocess.run(["make", "modules_prepare"], cwd=scratch_dir, check=True)
+        subprocess.run(["sudo", "ln", "-sfn", scratch_dir, build_path], check=True)
+        print(f"[!] WSL2 upstream kernel headers for relase {branch} loaded to {build_path}")
+        return True
+
+    else:
+        try:
+            subprocess.run(["sudo", "apt-get", "update"], check=True)
+            subprocess.run(["sudo", "apt-get", "install", "-y", f"linux-headers-{kernel_release}"], check=True)
+            print("[!] Standard kernel headers for kernel release: {kernel_release} loaded.")
+            return True
+        except subprocess.CalledProcessError:
+            subprocess.run(["sudo", "apt-get", "install", "-y", "linux-headers-generic"], check=True)
+            print("[!] Generic kernel headers loaded.")
+            return True
+
+def configure_vfio_user_pkt_sniffer_sudo_exemption(project_root):
+    """Setup passwordless sudo rules for vfio-user packet sniffer."""
+    local_user = os.environ.get("USER") or os.environ.get("LOGNAME")
+    sudoers_file = f"/etc/sudoers.d/vfio_user_pkt_sniffer"
+    sockdump_path = f"{project_root}/tools/net/sockdump.py"
+    pcap_file_path = f"{project_root}/logs/vfio-user.pcap"
+
+    exemption_rules = (
+        f"{local_user} ALL=(ALL) NOPASSWD: /usr/bin/python3 {sockdump_path} *\n"
+        f"{local_user} ALL=(ALL) NOPASSWD: /usr/bin/chown {local_user}\\:{local_user} {pcap_file_path}\n"
+        f"{local_user} ALL=(ALL) NOPASSWD: /usr/bin/chmod 664 {pcap_file_path}\n"
+    )
+
+    sudoers_cache_dir = os.path.expanduser("~/.config/vfio_user_pkt_sniffer")
+    os.makedirs(sudoers_cache_dir, exist_ok=True)
+    sudoers_cache_file = os.path.join(sudoers_cache_dir, "vfio_user_pkt_sniffer.cache")
+
+    if os.path.exists(sudoers_file) and not os.path.exists(sudoers_cache_file):
+        try:
+            result = subprocess.run(["sudo", "cat", sudoers_file], capture_output=True, text=True, check=True)
+            with open(sudoers_cache_file, "w") as f:
+                f.write(result.stdout)
+        except subprocess.CalledProcessError:
+            pass
+    cache_content = ""
+    if os.path.exists(sudoers_cache_file):
+        try:
+            with open(sudoers_cache_file, "r") as f:
+                cache_content = f.read()
+        except IOError:
+            pass
+
+    if exemption_rules in cache_content:
+        print(f"[✓ Skipping] Sudoers rules for {os.path.basename(project_root)} already configured")
+        return True
+
+    final_sudoers = cache_content + exemption_rules
+
+    try:
+        os.makedirs(sudoers_cache_dir, exist_ok=True)
+        with open(sudoers_cache_file, "w") as f:
+            f.write(final_sudoers)
+
+        check_cmd = ["sudo", "visudo", "-c", "-f", sudoers_cache_file]
+        result = subprocess.run(check_cmd, capture_output=True, text=True)
+
+        if result.returncode != 0:
+            print(f"\033[91m[⚠] Sudoers syntax validation failed: {result.stderr.strip()}\033[0m")
+            if os.path.exists(sudoers_cache_file):
+                os.remove(sudoers_cache_file)
+            return False
+
+        subprocess.run(["sudo", "cp", sudoers_cache_file, sudoers_file], check=True)
+        subprocess.run(["sudo", "chown", "root:root", sudoers_file], check=True)
+        subprocess.run(["sudo", "chmod", "0440", sudoers_file], check=True)
+
+        print(f"[✓ Success] Configured: {exemption_rules} to {sudoers_file} for vfio-user packet sniffer")
+        return True
+
+    except subprocess.CalledProcessError as e:
+        print(f"\033[91m[⚠️] Failed to write sudoers rules: {e}\033[0m")
+        return False
+
 def configure_vfio_user_dissector(project_root_dir):
     """Deploy the vfio_user.lua Wireshark packet dissector plugin."""
     source_dir = os.path.join(project_root_dir, "tools", "net")
@@ -463,8 +607,10 @@ def align_repo_state(repo_path, tag=None, branch=None, patch_path=None):
             )
 
             try:
-                target_tag_hash = subprocess.run(["git", "rev-parse", f"refs/tags/{tag}^{{commit}}"], cwd=repo_path, stdout=subprocess.PIPE, text=True, check=True).stdout.strip()
-                current_head_hash = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo_path, stdout=subprocess.PIPE, text=True, check=True).stdout.strip()
+                target_tag_hash = subprocess.run(["git", "rev-parse", f"refs/tags/{tag}^{{commit}}"],
+                                                cwd=repo_path, stdout=subprocess.PIPE, text=True, check=True).stdout.strip()
+                current_head_hash = subprocess.run(["git", "rev-parse", "HEAD"],
+                                                cwd=repo_path, stdout=subprocess.PIPE, text=True, check=True).stdout.strip()
 
                 if current_head_hash == target_tag_hash:
                     print(f"[✓ Git] '{repo_path}' aligned on tag '{tag}'")
@@ -502,7 +648,8 @@ def align_repo_state(repo_path, tag=None, branch=None, patch_path=None):
                 subprocess.run(["git", "stash"], cwd=repo_path, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
             try:
-                subprocess.run(["git", "checkout", "-b", branch, f"refs/tags/{tag}"], cwd=repo_path, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.run(["git", "checkout", "-b", branch, f"refs/tags/{tag}^{{commit}}"],
+                               cwd=repo_path, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             except subprocess.CalledProcessError as e:
                 print(f"[⚠️] Error: Failed to checkout '{branch}': {e}")
                 if is_dirty:
@@ -565,7 +712,7 @@ def build_repo(repo_name, repo_path, tag = None):
             if os.path.exists(build_dir):
                 shutil.rmtree(build_dir)
             print("→ Running: 'libvfio-user' meson setup build && meson compile -C build")
-            subprocess.run(["meson", "setup", "build"], cwd=repo_path, check=True)
+            subprocess.run(["meson", "setup", "build", '-Dc_args="-Wno-error=deprecated-declarations"'], cwd=repo_path, check=True)
             subprocess.run(["meson", "compile", "-C", "build"], cwd=repo_path, check=True)
 
         elif repo_name == "verilator":
@@ -704,29 +851,56 @@ def configure_wireshark_permissions():
         if os.path.exists("/usr/bin/dumpcap"):
             print("[→] Applying CAP_NET_RAW and CAP_NET_ADMIN capabilities to dumpcap...")
             subprocess.run(["sudo", "setcap", "CAP_NET_RAW+eip CAP_NET_ADMIN+eip", "/usr/bin/dumpcap"], check=True)
-            print("[→] Ensuring executable access on dumpcap...")
+            print("[→] Setting executable access on dumpcap...")
             subprocess.run(["sudo", "chmod", "+x", "/usr/bin/dumpcap"], check=True)
-            print("[✓ Success] Wireshark capture permissions configured! Please log out and back in to apply group changes.")
+            print("[✓ Success] Wireshark capture permissions configured.")
         else:
             print("[⚠️] Warning: /usr/bin/dumpcap not found. Wireshark package might have failed to install.")
     except subprocess.CalledProcessError as e:
         print(f"[⚠️] Failed to configure Wireshark capabilities: {e}")
 
-def configure_x11_resources():
+def configure_x11_resources(project_root):
     """Append the Xresources merge string to the user's .bashrc file."""
     bashrc_path = os.path.expanduser("~/.bashrc")
-    target_line = "xrdb -merge ~/.Xresources\n"
+    target_line = f"\nxrdb -merge {project_root}/tools/net/.Xresources\n"
 
     if os.path.exists(bashrc_path):
         with open(bashrc_path, "r") as f:
             content = f.readlines()
-        if any("xrdb -merge ~/.Xresources" in line for line in content):
+    if any("xrdb -merge" in line and "tools/net/.Xresources" in line for line in content):
             print("[✓ Skipping] '.bashrc' already contains Xresources initialization configuration")
             return
 
     with open(bashrc_path, "a") as f:
         f.write(f"{target_line}")
     print("[✓ Success] X11 startup rules appended to configuration profile")
+
+    try:
+        subprocess.run(["xrdb", "-merge", f"{project_root}/tools/net/.Xresources"], capture_output=True, check=True)
+    except subprocess.CalledProcessError:
+        pass
+
+def setup_kvm_permissions():
+    """Setup KVM virtualization access"""
+
+    if not os.path.exists("/dev/kvm"):
+        print("[✓ Skipping] ⚠️ /dev/kvm device node not found. Cannot configure KVM group permissions.")
+        return False
+
+    kvm_node = "/dev/kvm"
+
+    try:
+        mode = os.stat(kvm_node).st_mode & 0o777
+        if mode == 0o666:
+            return True
+
+        subprocess.run(["sudo", "chmod", "0666", kvm_node], check=True)
+        print(f"[✓ Success] Configured 'kvm' access to all users")
+        return True
+
+    except subprocess.CalledProcessError as e:
+        print(f"\033[91m[⚠️] Failed to configure KVM access permissions: {e}\033[0m")
+        return False
 
 def remove_components(target, blueprint, config_state):
     """ Remove installed components """
@@ -778,7 +952,7 @@ def remove_components(target, blueprint, config_state):
             print(f"[⚠️] Error: Package purging: {e}")
 
     for repo in remove_repos:
-        dir = repo.get("dir") or Path(repo["path"]).name
+        dir = repo.get("dir") or Path(repo["slug"]).name
         rdir = Path(repo.get("rdir"))
         repo_path = rdir / dir
 
@@ -975,7 +1149,7 @@ def main():
     def add_repos(repo_list):
         for r_entry in repo_list:
             r_id = r_entry["id"]        # mandatory entry
-            r_path = r_entry["path"]    # mandatory entry
+            r_slug = r_entry["slug"]    # mandatory entry
             r_type = r_entry.get("type")
             r_dir = r_entry.get("dir")
             r_rdir = r_entry.get("rdir") or resolved_dirs.get(r_type)
@@ -989,7 +1163,7 @@ def main():
             if r_id and r_id not in selected_ids:
                 repo_ids.append(r_id)
 
-            final_repos[r_path] = {
+            final_repos[r_slug] = {
                 "id": r_id,         # unique identifier for the repository
                 "dir": r_dir,       # clone destination directory name (if specified), otherwise defaults to repo name
                 "rdir": r_rdir,     # clone destination base/root directory based on type (os, bsp, tools)
@@ -1017,7 +1191,7 @@ def main():
         "packages": sorted(list(final_packages)),
         "repos": [
             {
-                "path": r_path,
+                "slug": r_slug,
                 "id": r_info["id"],
                 "dir": r_info["dir"],
                 "rdir": r_info["rdir"],
@@ -1028,7 +1202,7 @@ def main():
                 "patch": r_info["patch"],
                 "sparse": r_info["sparse"]
             }
-            for r_path, r_info in sorted(final_repos.items())
+            for r_slug, r_info in sorted(final_repos.items())
         ],
     }
 
@@ -1041,14 +1215,14 @@ def main():
     if packages_to_install:
         print(f"[+] Missing dependencies detected: {', '.join(packages_to_install)}")
         if not install_system_packages(packages_to_install):
-            print("[⚠️] Native Package alignment halted due to execution errors")
+            print("[⚠️] Package alignment halted due to execution errors")
         else:
             print("[+] Compilation dependency tools are available")
 
     print("Processing Repositories & Building From Source...")
 
     for repo_entry in compiled_config["repos"]:
-        repo = repo_entry["path"]
+        repo_slug = repo_entry["slug"]
         repo_id = repo_entry["id"]
         repo_dir = repo_entry["dir"]
         repo_root_dir = repo_entry["rdir"]
@@ -1056,10 +1230,10 @@ def main():
         if repo_id and repo_id not in (repo_ids + selected_ids):
             continue
 
-        repo_name = repo_dir if repo_dir else repo.split("/")[-1]
+        repo_name = repo_dir if repo_dir else repo_slug.split("/")[-1]
         os.makedirs(repo_root_dir, exist_ok=True)
         repo_path = os.path.join(repo_root_dir, repo_name)
-        clone_url = repo_entry.get("url") or f"https://github.com/{repo}.git"
+        clone_url = repo_entry.get("url") or f"https://github.com/{repo_slug}.git"
 
         if os.path.exists(repo_path) and os.path.isdir(os.path.join(repo_path, ".git")):
             print(f"[→] Repository '{clone_url}' already downloaded at: {repo_path}")
@@ -1070,9 +1244,9 @@ def main():
             repo_depth = repo_entry.get("depth")
             repo_sparse = repo_entry.get("sparse")
 
-            if (repo_sparse):
+            if repo_sparse:
                 clone_cmd += ["--depth", "1", "--filter=blob:none", "--sparse"]
-            if repo_depth:
+            elif repo_depth:
                 clone_cmd += ["--depth", str(repo_depth)]
 
             clone_cmd += [clone_url, repo_path]
@@ -1081,7 +1255,7 @@ def main():
             except subprocess.CalledProcessError:
                 print(f"[⚠️] Failed to fetch repository: {repo}")
                 continue
-            if (repo_sparse):
+            if repo_sparse:
                 subprocess.run(["git", "sparse-checkout", "set"] + repo_sparse, cwd=repo_path, check=True)
 
         tag = repo_entry.get("tag")
@@ -1098,11 +1272,18 @@ def main():
     verify_project_symlinks(project_root_dir, resolved_tools_dir, resolved_soc_dir, resolved_os_dir, selected_ids)
 
     if "networking" in selected_scope_ids:
-        configure_wireshark_permissions()
-        configure_vfio_user_dissector(project_root_dir)
+        if os.path.exists("/proc/sys/net/core/bpf_jit_enable"):
+            configure_kernel_headers_for_vfio_user_pkt_sniffer()
+            configure_wireshark_permissions()
+            configure_vfio_user_dissector(project_root_dir)
+            configure_vfio_user_pkt_sniffer_sudo_exemption(project_root_dir)
+        else:
+            print("\033[93m[Agent] Warning: Host kernel eBPF capabilities are disabled. Cannot operate the vfio-user packet sniffer.\033[0m")
 
     if "networking" in selected_scope_ids or "debug" in selected_scope_ids:
-        configure_x11_resources()
+        configure_x11_resources(project_root_dir)
+
+    setup_kvm_permissions()
 
     print("[+] Setup completed")
 

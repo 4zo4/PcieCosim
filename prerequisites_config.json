@@ -9,6 +9,7 @@
       "git",
       "wget",
       "build-essential",
+      "cmake",
       "ccache",
       "numactl",
       "perl",
@@ -30,13 +31,15 @@
       "autoconf",
       "libjemalloc-dev",
       "liblz4-dev",
+      "python3-venv",
+      "python3-pip",
       "python3-pexpect"
     ],
     "repos": [
-      { "path": "qemu/qemu", "id": "qemu", "type": "tools", "tag": "v11.1.0", "clone_depth": 1 },
-      { "path": "verilator/verilator", "id": "verilator", "type": "tools", "tag": "v5.050", "clone_depth": 1 },
-      { "path": "nutanix/libvfio-user", "id": "libvfiouser", "type": "tools" },
-      { "path": "chili-chips-ba/openPCIE", "id": "openpcie", "type": "soc", "sparse": ["2.amd-rtl-with-Vivado-build", "2.rtl"] }
+      { "slug": "qemu/qemu", "id": "qemu", "type": "tools", "tag": "v11.1.0", "clone_depth": 1 },
+      { "slug": "verilator/verilator", "id": "verilator", "type": "tools", "tag": "v5.050", "clone_depth": 1 },
+      { "slug": "nutanix/libvfio-user", "id": "libvfiouser", "type": "tools" },
+      { "slug": "chili-chips-ba/openPCIE", "id": "openpcie", "type": "soc", "sparse": ["2.amd-rtl-with-Vivado-build", "2.rtl"] }
     ]
   },
   "scopes": [
@@ -48,7 +51,7 @@
       "repos": [
         {
           "id": "linux",
-          "path": "torvalds/linux",
+          "slug": "torvalds/linux",
           "type": "os",
           "tag": "v6.8",
           "branch": "v6.8_pcie_cosim",
@@ -61,14 +64,14 @@
       "id": "networking",
       "name": "PCIe Co-Simulation Networking",
       "description": "Packet inspection tools, socket utilities, and virtualization interface dependencies",
-      "packages": ["tshark", "lsof", "socat", "wireshark", "xterm", "x11-xserver-utils"],
+      "packages": ["tshark", "lsof", "socat", "wireshark", "xterm", "x11-xserver-utils", "xfonts-base", "xfonts-utils", "python3-bpfcc", "bpfcc-tools"],
       "repos": []
     },
     {
       "id": "debug",
       "name": "Debug Tools",
       "description": "Cross-architecture debugging utilities",
-      "packages": ["gdb-multiarch", "xterm", "x11-xserver-utils"],
+      "packages": ["gdb-multiarch", "xterm", "x11-xserver-utils", "xfonts-base", "xfonts-utils"],
       "repos": []
     }
   ]

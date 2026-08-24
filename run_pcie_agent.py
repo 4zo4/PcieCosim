@@ -17,13 +17,44 @@ import json
 import os
 import subprocess
 import shutil
+import signal
 import struct
 import sys
 import threading
 import time
 import traceback
-import pexpect
 import re
+
+def install_system_packages(package_list):
+    """Update repositories and install a list of system packages."""
+    if not package_list:
+        return True
+    try:
+        print(f"[+] Processing system installation for: {', '.join(package_list)}")
+        subprocess.run(["sudo", "apt", "update"], check=True)
+        env = os.environ.copy()
+        env["DEBIAN_FRONTEND"] = "noninteractive"
+        subprocess.run(["sudo", "-E", "apt", "install", "-y"] + package_list, env=env, check=True)
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"[⚠️] Native package manager reported a failure: {e}")
+        return False
+try:
+    import pexpect
+except ModuleNotFoundError:
+    try:
+        import importlib.metadata
+        importlib.metadata.version("pexpect")
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+    except importlib.metadata.PackageNotFoundError:
+        pass
+
+    if install_system_packages(["python3-pexpect"]):
+        print("[✓ Success] python3-pexpect installed.")
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+    else:
+        print("[⚠️] Please execute manually: sudo apt install python3-pexpect")
+        sys.exit(1)
 
 def load_json(path):
     if not os.path.exists(path):
@@ -130,11 +161,13 @@ def stop_vfio_user_pkt_sniffer(sniffer_proc):
         return
 
     pgid = os.getpgid(sniffer_proc.pid)
-    print(f"[Agent] Disarming VFIO-User packet sniffer")
     try:
         start_time = time.time()
         terminated = False
-        subprocess.run(["sudo", "kill", "-2", f"-{pgid}"], check=False)
+        try:
+            os.killpg(pgid, signal.SIGINT)
+        except Exception:
+            subprocess.run(["sudo", "kill", "-2", str(sniffer_proc.pid)], check=False)
         while time.time() - start_time < 4.0:
             if sniffer_proc.poll() is not None:
                 terminated = True
@@ -143,7 +176,10 @@ def stop_vfio_user_pkt_sniffer(sniffer_proc):
 
         if not terminated:
             print("[Agent] Forcing sniffer kill...")
-            subprocess.run(["sudo", "kill", "-9", f"-{pgid}"], check=False)
+            try:
+                os.killpg(pgid, signal.SIGKILL)
+            except Exception:
+                subprocess.run(["sudo", "kill", "-9", f"-{pgid}"], check=False)
             sniffer_proc.kill()
             sniffer_proc.wait(timeout=1)
 
