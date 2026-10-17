@@ -193,22 +193,12 @@ You can see the simulation traces by running `make wave` or `gtkwave sim_wavefor
 
 #### 5.2.2 Wireshark Packet Sniffer
 
-Configure the sudoers file to grant the necessary permissions for executing the packet capture tool without password prompts:
+To run co-simulation with live vfio-user packet sniffing:
 ```text
-    Example configuration via '$ sudo visudo':
-
-    # Allow members of group sudo to execute any command
-    %sudo
-
-    purple ALL=(ALL) NOPASSWD: /usr/bin/kill
-    purple ALL=(ALL) NOPASSWD: /usr/bin/chown
-    purple ALL=(ALL) NOPASSWD: /usr/bin/chmod
-    purple ALL=(ALL) NOPASSWD: /usr/bin/python3 /home/purple/PcieCosim/tools/net/sockdump.py *
-
-    # See sudoers(5) for more information on "@include" directives:
-    @includedir /etc/sudoers.d
-    ...
+    ./run_pcie_agent.py --sniffer
 ```
+
+This opens a Wireshark popup window with the active vfio-user packet stream.
 
 A `vfio-user.pcap` file will be generated in `/path/to/your/local/PcieCosim/logs`.
 
