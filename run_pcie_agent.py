@@ -119,9 +119,10 @@ def start_vfio_user_pkt_sniffer(project_root, pcap_file_path, slog_file_path, so
     print(f"[Agent] Arming vfio-user packet sniffer on {socket_path} writing to {pcap_file_path}...")
 
     sockdump = os.path.join(project_root, "tools", "net", "sockdump.py")
-    os.makedirs(os.path.dirname(pcap_file_path), exist_ok=True)
+    with open(pcap_file_path, "w"): pass
 
-    print(f"[Agent] Starting {sockdump} writing its I/O to {slog_file_path}", flush=True)
+    print(f"[Agent] Starting {sockdump} with user output to {slog_file_path}", flush=True)
+
     cmd = [
         "sudo", "-n", "python3", sockdump,
         "--format", "pcap", "--raw",
@@ -131,7 +132,7 @@ def start_vfio_user_pkt_sniffer(project_root, pcap_file_path, slog_file_path, so
     ]
 
     try:
-        fd = open(slog_file_path, "w")
+        fd = open(slog_file_path, "w+", encoding="utf-8", errors="ignore", buffering=1)
         sockdump_env = os.environ.copy()
         sockdump_env["PYTHONUNBUFFERED"] = "1"
         proc = subprocess.Popen(
@@ -144,52 +145,136 @@ def start_vfio_user_pkt_sniffer(project_root, pcap_file_path, slog_file_path, so
         )
         proc.slog_fd = fd
         proc.pcap_file_path = pcap_file_path
+        proc.wireshark_proc = None
+        proc.wlog_fd = None
+        proc.wpipe = None
+        print("[Agent] Waiting for sniffer to start...", flush=True)
         time.sleep(3.0) # Allow the sniffer enough time to initialize and bind to the socket
         if proc.poll() is not None:
-            print(f"\033[31m[Agent] ERROR: Sniffer terminated early with exit code {proc.returncode}\033[0m")
+            print(f"\033[31m[Agent] Error: Sniffer terminated early with exit code {proc.returncode}\033[0m", flush=True)
+            try:
+                fd.seek(0)
+                err = fd.read()
+                print(f"\033[31m--- SOCKDUMP STDERR ROOT CAUSE ---\n{err if err.strip() else 'No stderr payload text written.\n'}-----------------------------------\033[0m", flush=True)
+            except Exception:
+                pass
+            fd.close()
             return None
-        else:
-            print(f"[Agent] Sniffer process started with PID {proc.pid}")
-            return proc
+
+        print(f"[Agent] Sniffer process started with PID {proc.pid}")
+        return proc
+
     except Exception as ex:
-        print(f"\033[31m[Agent] ERROR: Failed to spawn sockdump sniffer: {ex}\033[0m")
+        print(f"\033[31m[Agent] Error: Failed to spawn sockdump sniffer: {ex}\033[0m", flush=True)
+        if 'fd' in locals():
+            fd.close()
         return None
+
+def launch_wireshark(log_dir, sniffer_proc) -> None:
+    """Spawns Wireshark GUI tracker targeting the active flushed PCAP stream."""
+    if sniffer_proc is None or not hasattr(sniffer_proc, 'pcap_file_path'):
+        return
+
+    print(f"[Wireshark] Opening visualization pipe for {sniffer_proc.pcap_file_path}", flush=True)
+
+    wlog_path = os.path.join(log_dir, "wireshark.log")
+
+    if os.path.exists(wlog_path):
+        try: os.remove(wlog_path)
+        except Exception: pass
+
+    wireshark_pipe = f"tail -f -n +1 -c +0 {sniffer_proc.pcap_file_path} | wireshark -k -i -"
+
+    print(f"[Wireshark] Starting pipe '{wireshark_pipe}' with user output to {wlog_path}", flush=True)
+
+    try:
+        fd = open(wlog_path, "w+", encoding="utf-8", errors="ignore", buffering=1)
+
+        proc = subprocess.Popen(
+            wireshark_pipe,
+            shell=True,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=fd,
+            start_new_session=True
+        )
+
+        sniffer_proc.wireshark_proc = proc
+        sniffer_proc.wlog_fd = fd
+        sniffer_proc.wpipe = wireshark_pipe
+        time.sleep(1.5)
+
+        if proc.poll() is not None:
+            print(f"\033[31m[Wireshark] Error: Terminated early with exit code {proc.returncode}\033[0m", flush=True)
+            try:
+                fd.seek(0)
+                err = fd.read()
+                print(f"\033[31m--- WIRESHARK STDERR ROOT CAUSE ---\n{err if err.strip() else 'No stderr payload text written by graphic engine.\n'}-----------------------------------\033[0m", flush=True)
+            except Exception:
+                pass
+            fd.close()
+            sniffer_proc.wireshark_proc = None
+            return
+
+    except Exception as ex:
+        print(f"\033[31m[Wireshark] Error: Failed to spawn UI process: {ex}\033[0m", flush=True)
+        if 'fd' in locals():
+            fd.close()
+            return
+
+    print(f"[Wireshark] Pipe launched with PID {proc.pid}", flush=True)
 
 def stop_vfio_user_pkt_sniffer(sniffer_proc):
     """Detach the eBPF kernel hooks and save the pcap file."""
     if sniffer_proc is None:
         return
 
-    pgid = os.getpgid(sniffer_proc.pid)
-    try:
-        start_time = time.time()
-        terminated = False
-        try:
-            os.killpg(pgid, signal.SIGINT)
-        except Exception:
-            subprocess.run(["sudo", "kill", "-2", str(sniffer_proc.pid)], check=False)
-        while time.time() - start_time < 4.0:
-            if sniffer_proc.poll() is not None:
-                terminated = True
-                break
-            time.sleep(0.1)
-
-        if not terminated:
-            print("[Agent] Forcing sniffer kill...")
+    if hasattr(sniffer_proc, 'wireshark_proc') and sniffer_proc.wireshark_proc:
+        if sniffer_proc.wireshark_proc.poll() is None:
+            print("[Wireshark] Closing visualization pipe", flush=True)
             try:
-                os.killpg(pgid, signal.SIGKILL)
+                pgid = os.getpgid(sniffer_proc.wireshark_proc.pid)
+                os.killpg(pgid, 15)
+                sniffer_proc.wireshark_proc.wait(timeout=2.0)
             except Exception:
-                subprocess.run(["sudo", "kill", "-9", f"-{pgid}"], check=False)
-            sniffer_proc.kill()
-            sniffer_proc.wait(timeout=1)
+                try:
+                    os.killpg(pgid, 9)
+                    sniffer_proc.wireshark_proc.wait(timeout=1.0)
+                except Exception:
+                    pass
+    try:
+        if sniffer_proc.poll() is None:
+            start_time = time.time()
+            terminated = False
+
+            try:
+                os.killpg(sniffer_proc.pid, signal.SIGINT)
+            except Exception as sig_err:
+                os.kill(sniffer_proc.pid, signal.SIGINT)
+            while time.time() - start_time < 4.0:
+                if sniffer_proc.poll() is not None:
+                    terminated = True
+                    break
+                time.sleep(0.1)
+
+            if not terminated:
+                print("[Agent] Forcing sniffer kill...", flush=True)
+                try:
+                    os.killpg(sniffer_proc.pid, signal.SIGKILL)
+                except Exception:
+                    os.kill(sniffer_proc.pid, signal.SIGKILL)
+                sniffer_proc.wait(timeout=1)
 
     except Exception as ex:
-        print(f"\033[91m[Agent] FATAL: Exception thrown during sniffer teardown: {ex}\033[0m")
+        print(f"\n\033[91m[Agent] Fatal: Exception thrown during sniffer teardown: {ex}\033[0m")
         traceback.print_exc()
     finally:
         if hasattr(sniffer_proc, 'slog_fd') and sniffer_proc.slog_fd:
-            sniffer_proc.slog_fd.flush()
-            sniffer_proc.slog_fd.close()
+            try: sniffer_proc.slog_fd.close()
+            except Exception: pass
+        if hasattr(sniffer_proc, 'wlog_fd') and sniffer_proc.wlog_fd:
+            try: sniffer_proc.wlog_fd.close()
+            except Exception: pass
 
     if os.path.exists(sniffer_proc.pcap_file_path):
         user = getpass.getuser()
@@ -199,7 +284,23 @@ def stop_vfio_user_pkt_sniffer(sniffer_proc):
         size = os.path.getsize(sniffer_proc.pcap_file_path)
         print(f"[Agent] Packet trace size: {size} bytes committed to log tree")
     else:
-        print(f"\033[31m[Agent] ERROR: pcap file not found at {sniffer_proc.pcap_file_path}\033[0m")
+        print(f"\033[31m[Agent] Error: pcap file not found at {sniffer_proc.pcap_file_path}\033[0m")
+
+    try:
+        import glob
+        temp_files = glob.glob("/tmp/wireshark_Standard input*.pcapng")
+
+        for temp_file in temp_files:
+            try:
+                if os.stat(temp_file).st_uid == os.getuid():
+                    os.remove(temp_file)
+            except Exception:
+                pass
+
+        if temp_files:
+            print(f"[Agent] Removed {len(temp_files)} temporary Wireshark swap files from /tmp", flush=True)
+    except Exception:
+        pass
 
 def continuous_line_drainer(bridge_or_qemu, backend_log):
     """
@@ -244,7 +345,7 @@ def detect_and_initialize_guest_os_profile(args, qemu):
             r"pcie-cosim login:\s*$",         # 5: Generic Shared Hostname Login Fallback
         ], timeout=None)
     except Exception as ex:
-        print(f"\033[91m[Agent] ERROR: Early boot tracking exception caught: {ex}\033[0m")
+        print(f"\033[91m[Agent] Error: Early boot tracking exception caught: {ex}\033[0m")
         raise
 
     # PROFILE 1: UBUNTU LINUX
@@ -252,7 +353,7 @@ def detect_and_initialize_guest_os_profile(args, qemu):
         print("[Agent] Profile Identified: Ubuntu Noble Core Environment")
         manual = False # set True for manual login
         if manual:
-            print("[Agent] Type credentials manually. Press Ctrl+] to exit when done.")
+            print("[Agent] Type credentials manually. Press 'Ctrl + ]' to exit when done.")
             qemu.logfile_read = None
             time.sleep(0.1)
             qemu.interact(escape_character='\x1d')
@@ -451,7 +552,7 @@ def run_test_4_irq_verification(qemu, profile, log_file_path):
     qemu.expect(profile["prompt"], timeout=5)
 
     if "0000:01:00.0" not in qemu.before.decode():
-        print(f"\033[96m[Agent][TEST 4] FATAL: Device 0000:01:00.0 failed to bind under /sys/bus/pci/drivers/pci-endpoint-test/\033[0m")
+        print(f"\033[96m[Agent][TEST 4] Fatal: Device 0000:01:00.0 failed to bind under /sys/bus/pci/drivers/pci-endpoint-test/\033[0m")
         return False
 
     print(f"\033[96m[Agent][TEST 4] Enabling Bus Mastering and Memory paths via config space:\033[0m")
@@ -519,25 +620,7 @@ def run_test_4_irq_verification(qemu, profile, log_file_path):
         print(f"\033[31m[Agent][TEST 4] FAIL: Trigger written, but counter did not increment.\033[0m")
         return False
 
-def main():
-    if os.path.exists("/tmp/vfio-pcie.sock"):
-        print("\033[33m[Agent] Warning: PCI-Bridge already run.\033[0m", flush=True)
-
-    agent_id = os.getpid()
-    config_state = load_json(".configs.json")
-    config_meta = None
-
-    if config_state:
-        config_meta = config_state.get("meta", {})
-        config_repos = config_meta.get("repos", []) + config_meta.get("selected_repos", [])
-        config_scopes = config_meta.get("selected_scopes", [])
-    else:
-        print("\033[91m[Agent] Fatal: Workspace not initialized. Please run 'workspace_setup.py' to setup workspace.\033[0m")
-        sys.exit(1)
-
-    enable_net = "networking" in config_scopes
-    enable_dbg = "debug" in config_scopes
-
+def parse_arguments(enable_dbg, enable_net):
     parser = argparse.ArgumentParser(description="PCIe Co-Simulation Test Framework Agent")
     parser.add_argument(
         "--distro",
@@ -563,21 +646,13 @@ def main():
         "--bridge", action="store_true",
         help="Launch standalone PCIe Co-Simulation Bridge without QEMU guest OS"
     )
-    args = parser.parse_args()
+    return parser.parse_args()
 
-    print("\033[94m[Agent] Resolving workspace infrastructure layout...\033[0m")
-
-    project_root, log_dir, log_file_path, pcap_file_path, slog_file_path, image_root = resolve_relative_paths()
-    setup_log_directory(log_dir, log_file_path, pcap_file_path, slog_file_path, max_backups=2)
-    backend_log = open(log_file_path, "wb", buffering=0)
-
-    image_root = os.path.join(project_root, "third_party", "os", "images", "linux")
+def setup_qemu_args(args, image_root, external_kernel):
     base_cmd = (
         f"-enable-kvm -cpu qemu64,+kvm_pv_unhalt -m 1024M -machine pc -net none "
         f"-nographic -vga none"
     )
-    external_kernel = os.path.join(image_root, "vmlinuz.v6.8_pcie_cosim")
-    external_debug_kernel = os.path.join(image_root, "vmlinux.v6.8_pcie_cosim")
 
     if args.distro == "cirros":
         disk_img = os.path.join(image_root, "disk.cirros")
@@ -611,11 +686,10 @@ def main():
         )
     if args.distro != "ubuntu":
         if not os.path.exists(disk_img):
-            print(f"\033[91m[Agent] FATAL: Specified target disk image file asset missing: {disk_img}\033[0m")
+            print(f"\033[91m[Agent] Fatal: Specified target disk image file asset missing: {disk_img}\033[0m")
             print("Please run your asset management or symlink tools first.")
             sys.exit(1)
 
-    # Consolidated Execution Assignment
     qemu_args = [
         f"{base_cmd} "
         f"{append_args} "
@@ -623,8 +697,40 @@ def main():
         f"-device '{{\"driver\": \"vfio-user-pci\", \"socket\": {{\"type\": \"unix\", \"path\": \"/tmp/vfio-pcie.sock\"}}, \"bus\": \"pcie.1\", \"id\": \"pcie_cosim\"}}'"
     ]
 
-    gdb_sock = None
-    gdb_proc = None
+    return qemu_args
+
+def main():
+    if os.path.exists("/tmp/vfio-pcie.sock"):
+        print("\033[33m[Agent] Warning: PCI-Bridge already run.\033[0m", flush=True)
+
+    agent_id = os.getpid()
+    config_state = load_json(".configs.json")
+    config_meta = None
+
+    if config_state:
+        config_meta = config_state.get("meta", {})
+        config_repos = config_meta.get("repos", []) + config_meta.get("selected_repos", [])
+        config_scopes = config_meta.get("selected_scopes", [])
+    else:
+        print("\033[91m[Agent] Fatal: Workspace not initialized. Please run 'workspace_setup.py' to setup workspace.\033[0m")
+        sys.exit(1)
+
+    enable_dbg = "debug" in config_scopes
+    enable_net = "networking" in config_scopes
+    args = parse_arguments(enable_dbg, enable_net)
+
+    print("\033[94m[Agent] Resolving workspace infrastructure layout...\033[0m")
+
+    project_root, log_dir, log_file_path, pcap_file_path, slog_file_path, image_root = resolve_relative_paths()
+    setup_log_directory(log_dir, log_file_path, pcap_file_path, slog_file_path, max_backups=2)
+    backend_log = open(log_file_path, "wb", buffering=0)
+
+    image_root = os.path.join(project_root, "third_party", "os", "images", "linux")
+    external_kernel = os.path.join(image_root, "vmlinuz.v6.8_pcie_cosim")
+    external_debug_kernel = os.path.join(image_root, "vmlinux.v6.8_pcie_cosim")
+    qemu_args = setup_qemu_args(args, image_root, external_kernel)
+
+    gdb_sock, gdb_proc = None, None
     if enable_dbg and args.debug:
         gdb_sock = f"/tmp/gdb_{agent_id}.sock"
         qemu_args.extend(["-gdb", f"unix:{gdb_sock},server=on,wait=off", "-S"])
@@ -678,13 +784,13 @@ def main():
         time.sleep(0.5)
 
     except pexpect.TIMEOUT as e:
-        print(f"\033[91m[Agent] FATAL: PCIe-Bridge Backend Handshake Fail: {e}\033[0m")
+        print(f"\033[91m[Agent] Fatal: PCIe-Bridge Backend Handshake Fail: {e}\033[0m")
         bridge.terminate(force=True)
         backend_log.close()
         return
 
     if args.bridge:
-        print(f"[Agent] PCIe-Bridge launched in standalone mode. Press Ctrl+] to exit.")
+        print(f"[Agent] PCIe-Bridge launched in standalone mode. Press 'Ctrl + ]' to exit.")
         time.sleep(0.1)
         bridge.interact(escape_character='\x1d')
         try:
@@ -694,7 +800,7 @@ def main():
                 bridge.expect(pexpect.EOF, timeout=2)
                 print("[Agent] PCIe-Bridge reaped gracefully.")
         except pexpect.TIMEOUT:
-            print("[Agent] WARNING: PCIe-Bridge is frozen! Forcing kill...")
+            print("[Agent] Warning: PCIe-Bridge is frozen! Forcing kill...")
             bridge.terminate(force=True)
             for sock in ["/tmp/vfio-pcie.sock", "/tmp/pcie-cosim1.sock", "/tmp/pcie-cosim2.sock"]:
                 if os.path.exists(sock):
@@ -712,6 +818,10 @@ def main():
     if enable_net and args.sniffer:
         print(f"[Agent] Launching VFIO-User packet sniffer...")
         sniffer_proc = start_vfio_user_pkt_sniffer(project_root, pcap_file_path, slog_file_path)
+        if sniffer_proc is None:
+            print("\033[33m[Agent] Warning: Packet sniffer failed to arm.\033[0m", flush=True)
+        else:
+            launch_wireshark(log_dir, sniffer_proc)
 
     print(f"[Agent] Launching Guest OS Emulation...")
     qemu = pexpect.spawn(qemu_cmd)
@@ -742,7 +852,7 @@ def main():
         if env_profile.get("is_boot_failure", False):
             print(f"\033[93m[Agent] HALT: Automation aborted on a crashed OS.\033[0m")
             print(f"\033[93m[Agent] HALT: Transferring control to terminal console for troubleshooting.")
-            print("[Agent] HALT: Press Enter to access maintenance mode. Press Ctrl+] to exit agent.\n")
+            print("[Agent] HALT: Press Enter to access maintenance mode. Press 'Ctrl + ]' to exit agent.\n")
 
             qemu.sendline(b"")
             time.sleep(0.2)
@@ -776,17 +886,17 @@ def main():
         else:
             print(f"\033[35m[Agent] Automated verification BYPASSED.\033[0m")
 
-        print("\n\033[95m[Agent] Entering interactive mode. Press Ctrl+] to exit.\033[0m")
+        print("\n\033[95m[Agent] Entering interactive mode. Press 'Ctrl + ]' to exit.\033[0m")
 
         qemu.logfile_read = None
         time.sleep(0.1)
         qemu.interact(escape_character='\x1d')
 
     except pexpect.TIMEOUT as te:
-        print(f"\033[91m[Agent] FATAL: Pexpect Watchdog Timeout Expired: {te}\033[0m")
+        print(f"\033[91m[Agent] Fatal: Pexpect Watchdog Timeout Expired: {te}\033[0m")
         traceback.print_exc()
     except Exception as ex:
-        print(f"\033[91m[Agent] FATAL: Exception thrown: {ex}\033[0m")
+        print(f"\033[91m[Agent] Fatal: Exception thrown: {ex}\033[0m")
         traceback.print_exc()
     finally:
         print(f"\033[96m[Agent] Tearing down infrastructure...\033[0m")
@@ -804,7 +914,7 @@ def main():
                 bridge.expect(pexpect.EOF, timeout=2)
                 print("[Agent] PCIe-Bridge reaped gracefully.")
         except pexpect.TIMEOUT:
-            print("[Agent] WARNING: PCIe-Bridge is frozen! Forcing kill...")
+            print("[Agent] Warning: PCIe-Bridge is frozen! Forcing kill...")
             bridge.terminate(force=True)
             for sock in ["/tmp/vfio-pcie.sock", "/tmp/pcie-cosim1.sock", "/tmp/pcie-cosim2.sock"]:
                 if os.path.exists(sock):
