@@ -542,6 +542,37 @@ def verify_project_symlinks(project_root_dir, tools_dir, soc_dir, os_dir, select
             else:
                 print(f"[⚠️] Warning: Cannot generate symbolic link. Target directory missing at: {target_path}")
 
+def align_git_identity(repo_path):
+    """
+    Check if git user.email and user.name are configured.
+    If missing, set a local identity for the repository.
+    """
+    email_check = subprocess.run(
+        ["git", "-C", repo_path, "config", "user.email"],
+        capture_output=True, text=True
+    )
+
+    name_check = subprocess.run(
+        ["git", "-C", repo_path, "config", "user.name"],
+        capture_output=True, text=True
+    )
+
+    if email_check.returncode != 0 or not email_check.stdout.strip():
+        subprocess.run(
+            ["git", "-C", repo_path, "config", "--local", "user.email", "purple@purple.ca"],
+            check=True
+        )
+
+    if name_check.returncode != 0 or not name_check.stdout.strip():
+        subprocess.run(
+            ["git", "-C", repo_path, "config", "--local", "user.name", "Purple"],
+            check=True
+        )
+
+    if (name_check.returncode != 0 or not name_check.stdout.strip() or
+        email_check.returncode != 0 or not email_check.stdout.strip()):
+        print("[🌲 Git] user.name and/or user.email were missing. Configured local fallback...")
+
 def apply_patch(repo_path, branch, patch_path):
     """Safely and atomically applies a target patch file to a repository tree."""
     if not patch_path:
@@ -657,6 +688,7 @@ def align_repo_state(repo_path, tag=None, branch=None, patch_path=None):
                 return
 
             if patch_path:
+                align_git_identity(repo_path)
                 print(f"[🌲 Git] Patching '{repo_path}' branch '{branch}' from patch {patch_path}'...")
                 apply_patch(repo_path, branch, patch_path)
 

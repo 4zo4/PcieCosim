@@ -927,6 +927,9 @@ def main():
                 try:
                     gdb_proc.terminate()
                     gdb_proc.wait(timeout=1.0)
+                    if gdb_script_path and os.path.exists(gdb_script_path):
+                        try: os.unlink(gdb_script_path)
+                        except Exception: pass
                     print(f"[Agent] Terminated GDB.")
                 except subprocess.TimeoutExpired:
                     try:

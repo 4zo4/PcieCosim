@@ -95,8 +95,11 @@ fi
 echo "[Build] Synchronizing dependency tables (make olddefconfig)..."
 make olddefconfig
 
+COMPILER_OVERRIDE="gcc -std=gnu11 -Wno-error=unterminated-string-initialization"
 echo "[Build] Compiling bzImage image..."
-make -j$(nproc) bzImage
+make -j$(nproc) bzImage \
+    CC="${COMPILER_OVERRIDE}" \
+    HOSTCC="${COMPILER_OVERRIDE}"
 
 TARGET_DIR="${SCRIPT_DIR}/third_party/os/images/linux"
 
