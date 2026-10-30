@@ -62,12 +62,15 @@ SEFLAGS = -DENABLE_SW_LOGS=$(ENABLE_SW_LOGS) -DLOG_LEVEL=$(LOG_LEVEL) -DENABLE_W
 NFLAGS = -Wno-WIDTHTRUNC -Wno-WIDTHEXPAND -Wno-CASEX -Wno-COMBDLY -Wno-UNOPTFLAT --no-timing -Wno-fatal
 DFLAGS = --converge-limit 2000 --x-assign unique --x-initial unique -DVL_DEBUG
 VFLAGS = $(strip -I$(OPEN_PCIE_EP_PATH) $(NFLAGS) $(HEFLAGS))
-OFLAGS = -O3 # -g -O2
-CFLAGS = $(strip -fPIC -fcoroutines $(OEFLAGS) $(INC_FLAGS) $(SEFLAGS))
+OFLAGS = -O3
+CFLAGS = $(strip -fPIC -fcoroutines $(OFLAGS) $(INC_FLAGS) $(SEFLAGS))
 LDFLAGS = -lrt -lpthread
 LDFLAGS += -L$(LIBVFIO_PATH)/build/lib -Wl,-rpath,$(LIBVFIO_PATH)/build/lib -lvfio-user
 
 all: $(TARGET)
+
+debug: OFLAGS = -g -O0
+debug: $(TARGET)
 
 $(TARGET): clean $(HDL_SOURCES) $(CPP_SOURCES) $(COSIM_CPP_SOURCES)
 	$(VERILATOR) -cc --exe -j 24 \
@@ -127,4 +130,4 @@ clean:
 	@rm -rf $(BUILD_DIR)
 	@rm -f /tmp/*.sock
 
-.PHONY: all trace clean wave
+.PHONY: all trace clean wave debug
