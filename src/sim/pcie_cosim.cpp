@@ -285,9 +285,11 @@ static void doWriteMem(Protocol& pkt, Buf& dbuf)
 #if ENABLE_MSI_TEST
             uint32_t data = *dbuf.data<uint32_t>(i*sizeof(uint32_t));
             if (addr == 0 && data == 0xACDCBABE) {
-                uint32_t vector_idx = 0;
-                LOG_INFO("PCIe-SIM","Sending Irq vector index %u", vector_idx);
-                sendAsync(PktType::MSG, &vector_idx, sizeof(uint32_t));
+                MsgData msg_data;
+                msg_data.vector_idx = 0;
+                msg_data.irq_type = static_cast<uint8_t>(IrqType::DEV_MSI_IRQ);
+                LOG_INFO("PCIe-SIM","Sending %s Irq vector index %u", irqTypeToStr(msg_data.irq_type), msg_data.vector_idx);
+                sendAsync(PktType::MSG, reinterpret_cast<uint32_t*>(&msg_data), sizeof(MsgData));
                 break;
             }
 #endif

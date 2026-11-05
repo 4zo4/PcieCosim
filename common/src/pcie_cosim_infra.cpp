@@ -127,4 +127,20 @@ const char* pktTypeToStr(uint8_t type) {
     return pktTypeToStr(static_cast<PktType>(type));
 }
 
-#endif
+const char* irqTypeToStr(IrqType type)
+{
+    switch (type) {
+        case IrqType::DEV_INTX_IRQ: return "INTX";
+        case IrqType::DEV_MSI_IRQ:  return "MSI";
+        case IrqType::DEV_MSIX_IRQ: return "MSIX";
+        case IrqType::DEV_ERR_IRQ:  return "ERR";
+        case IrqType::DEV_REQ_IRQ:  return "REQ";
+    }
+    return "UNKNOWN";
+}
+
+const char* irqTypeToStr(uint8_t type) {
+    return irqTypeToStr(static_cast<IrqType>(type));
+}
+
+#endif // ENABLE_LOGS

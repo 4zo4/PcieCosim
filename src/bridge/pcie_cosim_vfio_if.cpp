@@ -51,6 +51,26 @@ using namespace std::literals;
 #include "common.h"
 #include "libvfio-user.h"
 
+// A compliant 64-bit MSI Capability Structure
+struct msi_cap_hdr {
+    uint8_t id;          // Byte 0: Capability ID (0x05 for MSI)
+    uint8_t next;        // Byte 1: Next Capability Pointer (0x00 indicating end of list)
+    uint16_t msg_ctrl;   // Byte 2: Message Control Register
+    uint32_t msg_addr_lo;
+    uint32_t msg_addr_hi;
+    uint16_t msg_data;
+    uint16_t padding;
+} __attribute__((packed));
+
+// A compliant MSI-X Capability Structure
+struct msix_cap_hdr {
+    uint8_t id;          // Byte 0: Capability ID (0x11 for MSI-X)
+    uint8_t next;        // Byte 1: Next Capability Pointer (0x00 indicating end of list)
+    uint16_t msg_ctrl;   // Byte 2: Message Control Register
+    uint32_t table_off;  // Lower 3 bits = BAR Indicator (BIR), Upper bits = Offset
+    uint32_t pba_off;    // Lower 3 bits = BIR, Upper bits = Offset
+} __attribute__((packed));
+
 #define PCI_VENDOR_ID_VFIO 0x494f
 #define PCI_DEVICE_ID_VFIO 0x0dc8
 
@@ -222,35 +242,45 @@ main(int argc, char *argv[])
         err(EXIT_FAILURE, "failed to setup BAR1 region");
     }
 
-    ret = vfu_setup_device_nr_irqs(vfu_ctx, VFU_DEV_MSI_IRQ, 1);
-    if (ret < 0) {
-        err(EXIT_FAILURE, "failed to setup MSI irq counts");
-    }
-
-    // Define a compliant 64-bit MSI Capability Structure layout
-    // Byte 0: Capability ID (0x05 for MSI)
-    // Byte 1: Next Capability Pointer (0x00 indicating end of list)
-    // Byte 2-3: Message Control Register (0x0081: 64-bit address capable, 1 vector requested, MSI enabled state tracking)
-    struct msi_cap_hdr {
-        uint8_t id;
-        uint8_t next;
-        uint16_t msg_ctrl;
-        uint32_t msg_addr_lo;
-        uint32_t msg_addr_hi;
-        uint16_t msg_data;
-        uint16_t padding;
-    } __attribute__((packed));
+#define VFU_DEV_CONF_CAP_POS_AUTO 0 // Let libvfio-user choose the position for the capability
+#define VFU_DEV_CONF_MAX_MSI_IRQS 8
+#define VFU_DEV_CONF_MAX_MSIX_IRQS 8
 
     msi_cap_hdr msi_cap = {};
+    msix_cap_hdr msix_cap = {};
+
     msi_cap.id = 0x05;         // PCI MSI Identifier
-    msi_cap.next = 0x00;       // End of the link chain tracking structures
+    msi_cap.next = 0x00;       // End of the link chain in the capability linked list
     msi_cap.msg_ctrl = 0x0081; // Bit 0 = 1 (MSI Enable tracking support), Bit 7 = 1 (64-bit capable)
 
-    ret = vfu_pci_add_capability(vfu_ctx, 0,
+    msix_cap.id = 0x11;         // PCI MSI-X Identifier
+    msix_cap.next = 0x00;       // End of the link chain in the capability linked list
+    msix_cap.msg_ctrl = 0x0007; // Table size = 8 entries (0-7)
+    msix_cap.table_off = 0x00000001; // Configure Table to live at BAR1, Offset 0x0000 (BIR = 1)
+    msix_cap.pba_off = 0x00000101; // Configure PBA to live at BAR1, Offset 0x0100 (BIR = 1)
+
+    ret = vfu_pci_add_capability(vfu_ctx, VFU_DEV_CONF_CAP_POS_AUTO, // Add MSI capability
                                  VFU_CAP_FLAG_NONE,   // Default access rules
                                  (uint8_t*)&msi_cap); // Pointer to MSI Capability structure
     if (ret < 0) {
         err(EXIT_FAILURE, "failed to add MSI capability to configuration space");
+    }
+
+    ret = vfu_pci_add_capability(vfu_ctx, VFU_DEV_CONF_CAP_POS_AUTO, // Add MSI-X capability
+                                 VFU_CAP_FLAG_NONE,   // Default access rules
+                                 (uint8_t*)&msix_cap);// Pointer to MSI-X Capability structure
+    if (ret < 0) {
+        err(EXIT_FAILURE, "failed to add MSI-X capability to configuration space");
+    }
+
+    ret = vfu_setup_device_nr_irqs(vfu_ctx, VFU_DEV_MSI_IRQ, VFU_DEV_CONF_MAX_MSI_IRQS);
+    if (ret < 0) {
+        err(EXIT_FAILURE, "failed to setup MSI irq counts");
+    }
+
+    ret = vfu_setup_device_nr_irqs(vfu_ctx, VFU_DEV_MSIX_IRQ, VFU_DEV_CONF_MAX_MSIX_IRQS);
+    if (ret < 0) {
+        err(EXIT_FAILURE, "failed to setup MSI-X irq counts");
     }
 
     ret = vfu_setup_device_dma(vfu_ctx, LIBVFIO_USER_MAX_DMA_REGIONS,
@@ -259,6 +289,7 @@ main(int argc, char *argv[])
         err(EXIT_FAILURE, "failed to setup DMA");
     }
 
+    // Start the asynchronous listener thread for handling IRQs
     std::thread irq_thread(pcie_bridge_async_listener, vfu_ctx);
     irq_thread.detach();
 

@@ -23,9 +23,29 @@ enum class PktType : uint8_t
     MEM_WR,
     CFG_RD,
     CFG_WR,
-    MSG,
+    MSG,          // Message packet type (e.g., MSI IRQ, MSI-X IRQ, etc.)
     NO_RSP = 0xFF // special type indicating no response expected
 };
+
+// IRQ types reflects the types of interrupts that vifio-user can handle (see vfu_dev_irq_type in libvfio-user.h),
+// including legacy INTx, MSI, MSI-X, error interrupts, and request interrupts.
+enum class IrqType : uint8_t
+{
+    DEV_INTX_IRQ,
+    DEV_MSI_IRQ,
+    DEV_MSIX_IRQ,
+    DEV_ERR_IRQ,
+    DEV_REQ_IRQ,
+    DEV_NUM_IRQS
+};
+
+// Message Packet (MSG) data for IRQs
+struct MsgData
+{
+    uint32_t vector_idx;
+    uint8_t  irq_type; // IrqType
+    uint8_t  pad[3];
+} __attribute__((packed));
 
 inline bool operator==(uint8_t lhs, PktType rhs) {
     return lhs == static_cast<uint8_t>(rhs);
@@ -110,7 +130,11 @@ public:
     std::vector<char, AlignedAllocator<char>> vec;
 };
 
+#ifndef NOP
 #define NOP() do {} while(0)
+#endif
 const char* pktTypeToStr(PktType type);
 const char* pktTypeToStr(uint8_t type);
+const char* irqTypeToStr(IrqType type);
+const char* irqTypeToStr(uint8_t type);
 void addPrefix(const std::string& tag);

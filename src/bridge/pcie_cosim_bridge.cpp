@@ -86,12 +86,12 @@ void pcie_bridge_async_listener(struct vfu_ctx *vfu_ctx)
         }
 
         if (pkt.type == PktType::MSG) {
-            uint32_t vector_idx = *reinterpret_cast<uint32_t*>(dbuf);
+            MsgData* msg_data = reinterpret_cast<MsgData*>(dbuf);
             socketChannel->channel = MAIN_CHANNEL; // switch back to Main channel
-            
-            LOG_INFO("PCIe-Bridge","Delivering Irq vector index %u", vector_idx);
-            
-            int ret = vfu_irq_trigger(vfu_ctx, vector_idx);
+
+            LOG_INFO("PCIe-Bridge","Delivering %s Irq vector index %u", irqTypeToStr(msg_data->irq_type), msg_data->vector_idx);
+
+            int ret = vfu_irq_trigger(vfu_ctx, msg_data->vector_idx);
             if (ret < 0) {
                 LOG_ERROR("PCIe-Bridge","[PKT][ERROR] vfu_irq_trigger returned %d (errno: %d)", ret, errno);
             }
@@ -125,7 +125,7 @@ static ssize_t pcie_bridge(uint16_t bar_id, char *buf, size_t count, loff_t offs
         } else {
             LOG_ERROR("PCIe-Bridge","[PKT][ERROR] type %d tag %d count %d",
                     resp.type, resp.tag, resp.count);
-            return -EIO; 
+            return -EIO;
         }
     }
 }
