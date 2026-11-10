@@ -31,6 +31,7 @@ enum class PktType : uint8_t
 // including legacy INTx, MSI, MSI-X, error interrupts, and request interrupts.
 enum class IrqType : uint8_t
 {
+    DEV_INT_NONE = 0,
     DEV_INTX_IRQ,
     DEV_MSI_IRQ,
     DEV_MSIX_IRQ,
@@ -39,13 +40,22 @@ enum class IrqType : uint8_t
     DEV_NUM_IRQS
 };
 
-// Message Packet (MSG) data for IRQs
+// Message Packet (MSG) data for IRQ packets
 struct MsgData
 {
     uint32_t vector_idx;
     uint8_t  irq_type; // IrqType
     uint8_t  pad[3];
 } __attribute__((packed));
+
+typedef struct {
+    uint32_t magic;     // magic number (e.g., 0xACDCBABE)
+    uint16_t vector_id; // 16-bit vector ID
+    uint8_t  int_type;  // 8-bit interrupt type (e.g., INTx, MSI, MSI-X)
+    uint8_t  pad;       // Padding to 64-bit boundary
+} __attribute__((aligned(8))) trigger_irq_pkt_t;
+
+static_assert(sizeof(trigger_irq_pkt_t) == 8, "trigger_irq_pkt_t struct size mismatch");
 
 inline bool operator==(uint8_t lhs, PktType rhs) {
     return lhs == static_cast<uint8_t>(rhs);

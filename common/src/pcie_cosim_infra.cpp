@@ -130,6 +130,7 @@ const char* pktTypeToStr(uint8_t type) {
 const char* irqTypeToStr(IrqType type)
 {
     switch (type) {
+        case IrqType::DEV_INT_NONE: return "NONE";
         case IrqType::DEV_INTX_IRQ: return "INTX";
         case IrqType::DEV_MSI_IRQ:  return "MSI";
         case IrqType::DEV_MSIX_IRQ: return "MSIX";

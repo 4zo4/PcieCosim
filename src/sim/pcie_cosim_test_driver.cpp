@@ -17,6 +17,9 @@ int pcie_bridge_disconnect(void);
 #define BAR0 0
 #define BAR1 1
 #define BAR_ID BAR0
+#define READ false
+#define WRITE true
+#define TRIGGER_IRQ_MAGIC 0xACDCBABE
 
 #define CONCAT2(a, b) a##b
 #define CONCAT(a, b) CONCAT2(a, b)
@@ -34,7 +37,6 @@ int test_pcie_bridge()
     uint32_t rbuf[16] = {0};
     size_t count = 16 * sizeof(uint32_t);
     loff_t offset = 0x04;
-    uint32_t trigger_irq = 0xACDCBABE;
     int k = 0, m = 0;
 
     char match[512] = "Data match at index";
@@ -42,14 +44,16 @@ int test_pcie_bridge()
     int matchIdx = strlen(match);
     int mismatchIdx = strlen(mismatch);
 
-    ret = pcie_bridge_bar(BAR_ID, wbuf, count, offset, true);
+    printf("PCIe bridge test 1: BAR%d W/R %lu bytes\n", BAR_ID, (unsigned long)count);
+
+    ret = pcie_bridge_bar(BAR_ID, wbuf, count, offset, WRITE);
 
     if (ret != static_cast<ssize_t>(count)) {
         ret = -1;
         goto out;
     }
 
-    ret = pcie_bridge_bar(BAR_ID, rbuf, count, offset, false);
+    ret = pcie_bridge_bar(BAR_ID, rbuf, count, offset, READ);
 
     if (ret != static_cast<ssize_t>(count)) {
         ret = -1;
@@ -71,7 +75,16 @@ int test_pcie_bridge()
         }
     }
 
-    pcie_bridge_bar(BAR1, &trigger_irq, 4, 0, true);
+    printf("PCIe bridge test 2: IRQ trigger via BAR%d write %X\n", BAR1, TRIGGER_IRQ_MAGIC);
+
+    trigger_irq_pkt_t trigger_irq;
+    trigger_irq.magic = TRIGGER_IRQ_MAGIC;
+    trigger_irq.vector_id = 1;
+    trigger_irq.int_type = static_cast<uint32_t>(IrqType::DEV_MSI_IRQ);
+    trigger_irq.pad = 0;
+    pcie_bridge_bar(BAR1, &trigger_irq, sizeof(trigger_irq_pkt_t), 0, WRITE);
+
+    sleep(1); // wait for interrupt propagation
 
     if (ret < 0) {
         std::cerr << mismatch << std::endl;

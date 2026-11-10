@@ -249,10 +249,11 @@ main(int argc, char *argv[])
     msi_cap_hdr msi_cap = {};
     msix_cap_hdr msix_cap = {};
 
-    msi_cap.id = 0x05;         // PCI MSI Identifier
-    msi_cap.next = 0x00;       // End of the link chain in the capability linked list
-    msi_cap.msg_ctrl = 0x0081; // Bit 0 = 1 (MSI Enable tracking support), Bit 7 = 1 (64-bit capable)
-
+    msi_cap.id = 0x05;          // PCI MSI Identifier
+    msi_cap.next = 0x00;        // End of the link chain in the capability linked list
+    msi_cap.msg_ctrl = 0x0187;  // Bit 0 = 1 (MSI Enable), Bit 1-3 = 011 (Multiple Message Capable: 2^3 = 8 vectors),
+                                // Bit 4-6 = 000 (Multiple Message Enable: initial allocation 0), Bit 7 = 1 (64-bit capable),
+                                // Bit 8 = 1 (Per-Vector Masking (PVM) capable)
     msix_cap.id = 0x11;         // PCI MSI-X Identifier
     msix_cap.next = 0x00;       // End of the link chain in the capability linked list
     msix_cap.msg_ctrl = 0x0007; // Table size = 8 entries (0-7)

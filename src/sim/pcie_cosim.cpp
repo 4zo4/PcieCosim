@@ -19,8 +19,8 @@
 #include "protocol.h"
 #include "log.h"
 
-#ifndef ENABLE_MSI_TEST
-#define ENABLE_MSI_TEST 0
+#ifndef ENABLE_PCI_INT_TEST
+#define ENABLE_PCI_INT_TEST 0
 #endif
 
 #define BAR_SHIFT 56
@@ -272,6 +272,25 @@ static void doWriteMem(uint32_t addr, uint8_t tag, uint16_t req_id, uint32_t dat
     }
 }
 
+static void handlePciIrq(uint16_t pkt_count, Buf& dbuf)
+{
+    MsgData msg_data{};
+    if (pkt_count == 4) {
+        msg_data.vector_idx = 0;
+        msg_data.irq_type = static_cast<uint8_t>(IrqType::DEV_MSI_IRQ);
+        LOG_INFO("PCIe-SIM","Sending PCI %s Irq vector index %u", irqTypeToStr(msg_data.irq_type), msg_data.vector_idx);
+    } else if (pkt_count == sizeof(trigger_irq_pkt_t)) {
+        const auto &trigger_irq = *dbuf.data<trigger_irq_pkt_t>(0);
+        msg_data.vector_idx = trigger_irq.vector_id;
+        msg_data.irq_type = trigger_irq.int_type;
+        LOG_INFO("PCIe-SIM","Sending PCI %s Irq vector index %u", irqTypeToStr(msg_data.irq_type), msg_data.vector_idx);
+    } else {
+        LOG_ERROR("PCIe-SIM","Received invalid PCIe IRQ message, size %u", pkt_count);
+        return;
+    }
+    sendAsync(PktType::MSG, reinterpret_cast<uint32_t*>(&msg_data), sizeof(MsgData));
+}
+
 static void doWriteMem(Protocol& pkt, Buf& dbuf)
 {
     uint32_t addr = pkt.addr & PCIE_ADDR_MASK;
@@ -279,17 +298,15 @@ static void doWriteMem(Protocol& pkt, Buf& dbuf)
     uint16_t req_id = pkt.req_id;
     uint8_t  tag = pkt.tag;
 
+    LOG_DEBUG("PCIe-SIM", "MWr %u bytes | Addr: 0x%x, BAR%u, ReqID: 0x%x, Tag: 0x%u", pkt.count, addr, bar_id, req_id, tag);
+
     switch (bar_id) {
     case 0:
         for (int i = 0; i < pkt.count/sizeof(uint32_t); i++) {
-#if ENABLE_MSI_TEST
+#if ENABLE_PCI_INT_TEST
             uint32_t data = *dbuf.data<uint32_t>(i*sizeof(uint32_t));
             if (addr == 0 && data == 0xACDCBABE) {
-                MsgData msg_data;
-                msg_data.vector_idx = 0;
-                msg_data.irq_type = static_cast<uint8_t>(IrqType::DEV_MSI_IRQ);
-                LOG_INFO("PCIe-SIM","Sending %s Irq vector index %u", irqTypeToStr(msg_data.irq_type), msg_data.vector_idx);
-                sendAsync(PktType::MSG, reinterpret_cast<uint32_t*>(&msg_data), sizeof(MsgData));
+                handlePciIrq(pkt.count, dbuf);
                 break;
             }
 #endif
@@ -299,6 +316,13 @@ static void doWriteMem(Protocol& pkt, Buf& dbuf)
         break;
     case 1:
         for (int i = 0; i < pkt.count/sizeof(uint32_t); i++) {
+#if ENABLE_PCI_INT_TEST
+            uint32_t data = *dbuf.data<uint32_t>(i*sizeof(uint32_t));
+            if (addr == 0 && data == 0xACDCBABE) {
+                handlePciIrq(pkt.count, dbuf);
+                break;
+            }
+#endif
             mock_reg[i] = *dbuf.data<uint32_t>(i*sizeof(uint32_t));
             addr += sizeof(uint32_t);
         }
